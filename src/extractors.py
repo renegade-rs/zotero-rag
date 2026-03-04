@@ -16,17 +16,18 @@ logger = logging.getLogger(__name__)
 def preprocess_text(text):
     """Clean up extracted text: rejoin hyphenated line breaks, normalize whitespace."""
     text = re.sub(r'(\w)-\n(\w)', r'\1\2', text)
+    text = re.sub(r'\f', ' ', text)  # NEW: Convert form feeds to spaces
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[^\S\n\f]+', ' ', text)
     return text.strip()
 
 
-def extract_pdf_text(pdf_bytes, item_key):
+def extract_pdf_text(pdf_bytes, item_key, filename):
     """Extract text from PDF bytes using pdftotext -layout.
 
     Returns (text, page_count) tuple.
     """
-    cache_path = CACHE_DIR / f"{item_key}.txt"
+    cache_path = CACHE_DIR / f"{filename}_{item_key}.txt"
     if cache_path.exists():
         text = cache_path.read_text(encoding='utf-8')
         page_count = text.count('\f') + 1

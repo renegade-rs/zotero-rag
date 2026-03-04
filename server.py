@@ -21,6 +21,10 @@ from mcp.server.fastmcp import FastMCP
 
 from src.search_pipeline import init_pipeline, run_search, get_archive_aliases
 from src.vectordb import get_index_stats
+from src.logging_config import setup_logging
+
+log_file = setup_logging("server")
+print(f"Logs written to: {log_file}")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -7,3 +7,5 @@ sync_state.json
 archive_aliases.json
 *.pyc
 .DS_Store
+.opencode
+logs/

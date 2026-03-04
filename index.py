@@ -11,8 +11,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.indexer import run_full_index, run_incremental_update
+from src.logging_config import setup_logging
 
 if __name__ == '__main__':
+    log_file = setup_logging("index")
+    print(f"Logs written to: {log_file}")
+    
     if '--update' in sys.argv:
         run_incremental_update()
     else:

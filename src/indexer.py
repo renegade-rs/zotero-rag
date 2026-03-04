@@ -6,9 +6,10 @@ import re
 import sys
 
 from src.config import SYNC_STATE_FILE, ARCHIVE_ALIASES_FILE, COLLECTION_KEY
+print('Collection key: ', COLLECTION_KEY)
 from src.zotero_client import (
     get_zotero_client, build_collection_tree, get_all_items,
-    get_child_attachments,
+    get_child_attachments, fetch_attachment_file,
 )
 from src.extractors import (
     select_best_attachment, extract_pdf_text, extract_epub_text,
@@ -83,40 +84,58 @@ def process_item(zot, item, collection_tree):
     chunks = []
 
     attachments = get_child_attachments(zot, item_key)
-    best_att, att_type = select_best_attachment(attachments)
+    
+    if attachments:
+        best_att, att_type = select_best_attachment(attachments)
+        
+        if best_att and att_type == 'pdf':
+            result = fetch_attachment_file(zot, best_att['key'])
+            if result:
+                file_bytes, filename, _, source = result
+                try:
+                    text, page_count = extract_pdf_text(file_bytes, best_att['key'], filename=filename)
+                    if text.strip():
+                        metadata['attachment_key'] = best_att['key']
+                        metadata['attachment_type'] = 'pdf'
+                        metadata['page_count'] = page_count
+                        chunks = chunk_document(text, item_type, metadata)
+                except Exception as e:
+                    logger.warning(f"Failed to extract PDF for {item_key}: {e}")
 
-    if best_att and att_type == 'pdf':
-        try:
-            pdf_bytes = zot.file(best_att['key'])
-            text, page_count = extract_pdf_text(pdf_bytes, best_att['key'])
-            if text.strip():
-                metadata['attachment_key'] = best_att['key']
-                metadata['attachment_type'] = 'pdf'
-                metadata['page_count'] = page_count
-                chunks = chunk_document(text, item_type, metadata)
-        except Exception as e:
-            logger.warning(f"Failed to extract PDF for {item_key}: {e}")
+        elif best_att and att_type == 'epub':
+            result = fetch_attachment_file(zot, best_att['key'])
+            if result:
+                file_bytes, _, _, source = result
+                try:
+                    chapters = extract_epub_text(file_bytes, best_att['key'])
+                    if chapters:
+                        metadata['attachment_key'] = best_att['key']
+                        metadata['attachment_type'] = 'epub'
+                        chunks = chunk_epub(chapters, metadata)
+                except Exception as e:
+                    logger.warning(f"Failed to extract EPUB for {item_key}: {e}")
 
-    elif best_att and att_type == 'epub':
-        try:
-            epub_bytes = zot.file(best_att['key'])
-            chapters = extract_epub_text(epub_bytes, best_att['key'])
-            if chapters:
-                metadata['attachment_key'] = best_att['key']
-                metadata['attachment_type'] = 'epub'
-                chunks = chunk_epub(chapters, metadata)
-        except Exception as e:
-            logger.warning(f"Failed to extract EPUB for {item_key}: {e}")
-
-    elif best_att and att_type == 'snapshot':
-        try:
-            html_bytes = zot.file(best_att['key'])
-            text = extract_html_text(html_bytes)
-            if text.strip():
-                chunks = chunk_document(text, item_type, metadata)
-        except Exception as e:
-            logger.warning(f"Failed to extract snapshot for {item_key}: {e}")
-
+        elif best_att and att_type == 'snapshot':
+            result = fetch_attachment_file(zot, best_att['key'])
+            if result:
+                file_bytes, _, _, source = result
+                try:
+                    text = extract_html_text(file_bytes)
+                    if text.strip():
+                        chunks = chunk_document(text, item_type, metadata)
+                except Exception as e:
+                    logger.warning(f"Failed to extract snapshot for {item_key}: {e}")
+        else:
+            abstract = metadata.get('abstract', '')
+            if abstract:
+                chunks = chunk_document(abstract, item_type, metadata)
+            else:
+                meta_text = f"{title}. {', '.join(metadata['authors'])}. {metadata['date']}."
+                if metadata['archive']:
+                    meta_text += f" {metadata['archive']}."
+                if metadata['tags']:
+                    meta_text += f" Tags: {', '.join(metadata['tags'])}."
+                chunks = [{'text': meta_text, 'chunk_index': 0, 'total_chunks': 1, 'metadata': metadata}]
     else:
         abstract = metadata.get('abstract', '')
         if abstract:
@@ -130,7 +149,6 @@ def process_item(zot, item, collection_tree):
             chunks = [{'text': meta_text, 'chunk_index': 0, 'total_chunks': 1, 'metadata': metadata}]
 
     return chunks
-
 
 def index_items(items, zot, collection_tree, batch_size=50):
     """Index a list of items: extract, chunk, embed, upsert to Pinecone."""
@@ -165,6 +183,20 @@ def index_items(items, zot, collection_tree, batch_size=50):
         ]
         embeddings = embed_texts(texts)
 
+        # Filter out chunks with None embeddings (failed to generate)
+        valid_chunks = []
+        valid_embeddings = []
+        for chunk, embedding in zip(batch, embeddings):
+            if embedding is None:
+                logger.warning(f"Skipping chunk {chunk['metadata']['zotero_key']}_c{chunk['chunk_index']} - embedding failed")
+            else:
+                valid_chunks.append(chunk)
+                valid_embeddings.append(embedding)
+
+        if not valid_chunks:
+            logger.warning("All chunks in batch failed to embed, skipping...")
+            continue
+
         vectors = []
         for j, (chunk, embedding) in enumerate(zip(batch, embeddings)):
             chunk_id = f"{chunk['metadata']['zotero_key']}_c{chunk['chunk_index']}"
@@ -197,6 +229,7 @@ def index_items(items, zot, collection_tree, batch_size=50):
                 flat_meta['chapter'] = chunk['metadata']['chapter']
 
             vectors.append((chunk_id, embedding, flat_meta))
+            #print(j, chunk_id, embedding, flat_meta)
 
         upsert_chunks(vectors)
         logger.info(f"  Upserted batch {batch_start//batch_size + 1} ({len(batch)} chunks)")

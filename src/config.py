@@ -4,8 +4,8 @@ All credentials and settings are loaded from environment variables.
 Copy .env.example to .env and fill in your values.
 """
 
-import os
 import pathlib
+import os
 
 # Zotero API (required)
 ZOTERO_LIBRARY_ID = os.environ.get("ZOTERO_LIBRARY_ID", "")
@@ -19,6 +19,10 @@ COLLECTION_KEY = os.environ.get("ZOTERO_COLLECTION_KEY", "")
 PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 CACHE_DIR = PROJECT_ROOT / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
+
+# Logs directory
+LOGS_DIR = PROJECT_ROOT / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
 
 # Chunking defaults
 CHUNK_SIZE_TOKENS = 600
@@ -59,3 +63,11 @@ SYNC_STATE_FILE = PROJECT_ROOT / "sync_state.json"
 
 # Archive aliases (generated at index time from collection tree)
 ARCHIVE_ALIASES_FILE = PROJECT_ROOT / "archive_aliases.json"
+
+# WebDAV configuration (optional - for fetching attachments from WebDAV server)
+WEBDAV_URL = os.environ.get("WEBDAV_URL", "")
+WEBDAV_USERNAME = os.environ.get("WEBDAV_USERNAME", "")
+WEBDAV_PASSWORD = os.environ.get("WEBDAV_PASSWORD", "")
+WEBDAV_AUTH_TYPE = os.environ.get("WEBDAV_AUTH_TYPE", "basic").lower()
+
+

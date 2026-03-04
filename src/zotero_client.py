@@ -1,10 +1,18 @@
 """Zotero API client and collection hierarchy mapper."""
+import logging
+logger = logging.getLogger(__name__)
 
 import re
 from pyzotero import zotero
 from src.config import (
     ZOTERO_LIBRARY_ID, ZOTERO_API_KEY, ZOTERO_LIBRARY_TYPE, COLLECTION_KEY,
 )
+
+try:
+    from src.webdav_client import get_webdav_client
+except ImportError:
+    def get_webdav_client():
+        return None
 
 
 def get_zotero_client():
@@ -182,3 +190,30 @@ def get_child_notes(zot, parent_key):
     """Get all child notes for a parent item."""
     children = zot.children(parent_key)
     return [c for c in children if c['data']['itemType'] == 'note']
+
+def fetch_attachment_file(zot, item_key):
+    """
+    Fetch attachment file from WebDAV (primary) or Zotero API (fallback).
+    
+    Args:
+        zot: Zotero client instance
+        item_key: Zotero item key
+        
+    Returns:
+        Tuple of (file_bytes, filename, content_type, source) or None
+        where source is 'webdav' or 'zotero'
+    """
+    webdav = get_webdav_client()
+    
+    if webdav:
+        result = webdav.get_attachment_from_zip(item_key)
+        if result:
+            file_bytes, filename, content_type = result
+            return (file_bytes, filename, content_type, 'webdav')
+    
+    try:
+        att = zot.file(item_key)
+        return (att, f'{item_key}.pdf', 'application/pdf', 'zotero')
+    except Exception as e:
+        logger.debug(f"Zotero API file fetch failed for {item_key}: {e}")
+        return None

@@ -27,6 +27,10 @@ load_dotenv()
 
 from src.search_pipeline import init_pipeline, run_search
 from src.vectordb import get_index_stats
+from src.logging_config import setup_logging
+
+log_file = setup_logging("search")
+print(f"Logs written to: {log_file}")
 
 
 def format_results(results, query_str):
@@ -49,46 +53,19 @@ def format_results(results, query_str):
         if page_start > 0:
             page_str = f", pp. {page_start}-{page_end}" if page_end > page_start else f", p. {page_start}"
 
-        rerank_score = r.get('rerank_score')
-        score_str = f"Embed: {r['score']:.3f}"
-        if rerank_score is not None:
-            score_str += f" | Rerank: {rerank_score:.3f}"
+        zotero_key = meta.get('zotero_key', '')
+        item_type_str = f" [{item_type}]" if item_type else ""
 
-        archive_info = ''
-        arch = meta.get('archive', '')
-        arch_loc = meta.get('archive_location', '')
-        if arch:
-            archive_info = f"  Archive: {arch}"
-            if arch_loc:
-                archive_info += f", {arch_loc}"
-
-        text = meta.get('text', '').strip()
-        preview = text[:600]
-        if len(text) > 600:
-            preview += '...'
-
-        lines.append(f"[{i}] {title}")
-        lines.append(f"    {authors} ({date}) -- {item_type}{page_str}")
-        lines.append(f"    {score_str}")
-        if archive_info:
-            lines.append(f"   {archive_info}")
-        lines.append(f"    {preview}")
-        lines.append("")
+        lines.append(
+            f"{i}. {title}{item_type_str} -- {authors}"
+            f" ({date}){page_str}"
+        )
 
     return '\n'.join(lines)
 
 
-def open_result(results, number):
-    """Open a result in Zotero by its [N] number."""
-    idx = number - 1
-    if idx < 0 or idx >= len(results):
-        print(f"No result [{number}]. Got {len(results)} results.")
-        return
-    meta = results[idx]['metadata']
-    attachment_key = meta.get('attachment_key', '')
-    zotero_key = meta.get('zotero_key', '')
-    page = meta.get('pdf_page', meta.get('page_start', 0))
-
+def open_source(zotero_key=None, attachment_key=None, page=None):
+    """Open a Zotero source in the desktop app."""
     if attachment_key:
         url = f"zotero://open-pdf/library/items/{attachment_key}"
         if page:
@@ -96,63 +73,91 @@ def open_result(results, number):
     elif zotero_key:
         url = f"zotero://select/library/items/{zotero_key}"
     else:
-        print("No Zotero key for this result.")
-        return
-
+        return False
+    
     if sys.platform == "darwin":
-        subprocess.Popen(['open', url])
+        subprocess.run(['open', url])
     elif sys.platform.startswith("linux"):
-        subprocess.Popen(['xdg-open', url])
+        subprocess.run(['xdg-open', url])
     elif sys.platform == "win32":
         os.startfile(url)
-    print(f"Opened in Zotero: {url}")
+    
+    return True
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Search your Zotero library (no LLM needed).',
-        epilog='Filters: type:hearing by:Author tag:topic in:Archive from:1981 to:1985',
-    )
-    parser.add_argument('query', nargs='*', help='Search query with optional shorthand filters')
-    parser.add_argument('--top', '-n', type=int, default=10, help='Number of results (default: 10)')
-    parser.add_argument('--stats', action='store_true', help='Show index stats and exit')
+    parser = argparse.ArgumentParser(description='Search Zotero RAG index')
+    parser.add_argument('query', help='Search query (semantic search by meaning)')
+    parser.add_argument('--top', type=int, default=10, help='Number of results to return')
+    parser.add_argument('--type', dest='item_type', help='Filter by item type')
+    parser.add_argument('--by', dest='author', help='Filter by author')
+    parser.add_argument('--tag', help='Filter by tag')
+    parser.add_argument('--in', dest='collection', help='Filter by collection')
+    parser.add_argument('--archive', help='Filter by archive')
+    parser.add_argument('--from', dest='date_from', help='Filter from date (YYYY or YYYY-MM-DD)')
+    parser.add_argument('--to', dest='date_to', help='Filter to date (YYYY or YYYY-MM-DD)')
+    
     args = parser.parse_args()
-
-    print("Initializing...", end=' ', flush=True)
+    
     init_pipeline()
-    print("done.")
-
-    if args.stats:
-        stats = get_index_stats()
-        print(f"Index: {stats.total_vector_count} vectors")
-        return
-
-    if not args.query:
-        parser.print_help()
-        return
-
-    query_str = ' '.join(args.query)
-    results = run_search(query_str, top_k=args.top)
-    print(format_results(results, query_str))
-
-    if results and sys.stdin.isatty():
-        print("Enter a number to open in Zotero, a new query to search, or 'q' to quit.")
-        while True:
-            try:
-                cmd = input("\n> ").strip()
-            except (EOFError, KeyboardInterrupt):
+    
+    results = run_search(
+        query=args.query,
+        top_k=args.top,
+        item_type=args.item_type,
+        author=args.author,
+        tag=args.tag,
+        collection=args.collection,
+        archive=args.archive,
+        date_from=args.date_from,
+        date_to=args.date_to,
+    )
+    
+    print()
+    print(format_results(results, args.query))
+    
+    while True:
+        print()
+        user_input = input("Enter citation number to open, empty query to search again, or 'q' to quit: ").strip()
+        
+        if user_input.lower() == 'q':
+            break
+        
+        if not user_input:
+            print()
+            new_query = input("Enter new search query: ").strip()
+            if new_query:
+                results = run_search(
+                    query=new_query,
+                    top_k=args.top,
+                    item_type=args.item_type,
+                    author=args.author,
+                    tag=args.tag,
+                    collection=args.collection,
+                    archive=args.archive,
+                    date_from=args.date_from,
+                    date_to=args.date_to,
+                )
                 print()
-                break
-            if not cmd or cmd.lower() in ('q', 'quit', 'exit'):
-                break
-            m = re.match(r'^(?:open\s+)?(\d+)$', cmd, re.IGNORECASE)
-            if m:
-                open_result(results, int(m.group(1)))
-                continue
-            results = run_search(cmd, top_k=args.top)
-            print(format_results(results, cmd))
-            if results:
-                print("Enter a number to open in Zotero, a new query to search, or 'q' to quit.")
+                print(format_results(results, new_query))
+            continue
+        
+        try:
+            idx = int(user_input) - 1
+            if 0 <= idx < len(results):
+                meta = results[idx]['metadata']
+                zotero_key = meta.get('zotero_key', '')
+                attachment_key = meta.get('attachment_key', '')
+                page = meta.get('pdf_page', meta.get('page_start', 0))
+                
+                if open_source(zotero_key=zotero_key, attachment_key=attachment_key, page=page or None):
+                    print(f"Opened {meta.get('title', 'source')} in Zotero")
+                else:
+                    print("Could not open source")
+            else:
+                print(f"Invalid citation number. Available: 1-{len(results)}")
+        except ValueError:
+            print("Please enter a number, 'q' to quit, or empty line for new search.")
 
 
 if __name__ == '__main__':
