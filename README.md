@@ -1,3 +1,14 @@
+**This is a fork of the [Zotero RAG](https://github.com/freshaf/zotero-rag) repository by [freshaf](https://github.com/freshaf).**
+
+Additions/Changes:
+- Support for using **webdav** storage besides Zotero storage
+- Changed from Pinecone as vectordatabase storage to open-source, locally running **Milvus**
+- Webapp: Output stream now independent from CDN by using local `marked.min.js`
+
+----
+----    
+
+
 # Zotero RAG: AI-Powered Research Assistant for Your Zotero Library
 
 Search your Zotero library using natural language and get AI-generated answers grounded in your actual sources, with citations and links back to the original documents.
