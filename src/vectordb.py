@@ -1,60 +1,128 @@
-"""Pinecone vector database operations."""
+"""Milvus vector database operations."""
 
 import logging
-from pinecone import Pinecone, ServerlessSpec
+from pymilvus import MilvusClient, DataType
 
-from src.config import PINECONE_API_KEY, PINECONE_INDEX_NAME, EMBEDDING_DIMENSION
+from src.config import (
+    MILVUS_URI,
+    MILVUS_COLLECTION_NAME,
+    MILVUS_INDEX_TYPE,
+    MILVUS_LOAD_COLLECTION,
+    MILVUS_LOAD_TIMEOUT,
+    EMBEDDING_DIMENSION,
+)
+from src.embeddings import get_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
-_pc = None
-_index = None
+_client = None
 
 
-def init_pinecone(dimension=None):
-    """Initialize Pinecone client and ensure index exists.
+def init_milvus(dimension=None, load_collection=None, load_timeout=None):
+    """Initialize Milvus client and ensure collection exists.
 
     Args:
         dimension: embedding dimension (auto-detected if not provided)
+        load_collection: whether to load collection into memory (uses config default if None)
+        load_timeout: timeout in seconds for loading collection (uses config default if None)
     """
-    global _pc, _index
-    if not PINECONE_API_KEY:
-        raise ValueError("PINECONE_API_KEY not set. Export it or add to .env file.")
-
-    dim = dimension or EMBEDDING_DIMENSION
-
-    _pc = Pinecone(api_key=PINECONE_API_KEY)
-
-    existing = [idx.name for idx in _pc.list_indexes()]
-    if PINECONE_INDEX_NAME not in existing:
-        logger.info(f"Creating Pinecone index '{PINECONE_INDEX_NAME}' (dimension={dim})...")
-        _pc.create_index(
-            name=PINECONE_INDEX_NAME,
-            dimension=dim,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+    global _client
+    dim = dimension or get_embedding_dimension()
+    
+    _client = MilvusClient(uri=MILVUS_URI)
+    
+    collections = _client.list_collections()
+    print(f'Existing collections: {collections}')
+    
+    if MILVUS_COLLECTION_NAME not in collections:
+        logger.info(f"Creating Milvus collection '{MILVUS_COLLECTION_NAME}' (dimension={dim})..")
+        
+        schema = _client.create_schema(auto_id=False)
+        schema.add_field("chunk_id", DataType.VARCHAR, max_length=512, is_primary=True)
+        schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=dim)
+        schema.add_field("metadata", DataType.JSON)
+        
+        _client.create_collection(
+            collection_name=MILVUS_COLLECTION_NAME,
+            schema=schema,
         )
-        logger.info("Index created.")
-
-    _index = _pc.Index(PINECONE_INDEX_NAME)
-    return _index
+        logger.info(f"Collection created.")
+    
+    # Ensure index exists (create if missing)
+    from pymilvus.milvus_client.index import IndexParam, IndexParams
+    
+    # Check if index exists
+    indexes = _client.list_indexes(collection_name=MILVUS_COLLECTION_NAME)
+    if not indexes:
+        logger.info(f"Creating index on collection '{MILVUS_COLLECTION_NAME}'...")
+        
+        index_params = IndexParams()
+        index_params.add_index(
+            field_name="embedding",
+            index_type=MILVUS_INDEX_TYPE.upper(),
+            metric_type="COSINE"
+        )
+        
+        _client.create_index(
+            collection_name=MILVUS_COLLECTION_NAME,
+            index_params=index_params,
+        )
+        logger.info(f"Index created with {MILVUS_INDEX_TYPE} type.")
+        
+        # Wait for index to finish building before loading
+        import time
+        time.sleep(3)
+        logger.info("Index should be ready.")
+    
+    # Load collection into memory if configured
+    should_load = load_collection if load_collection is not None else MILVUS_LOAD_COLLECTION
+    timeout = load_timeout if load_timeout is not None else MILVUS_LOAD_TIMEOUT
+    
+    if should_load:
+        logger.info(f"Loading collection '{MILVUS_COLLECTION_NAME}' into memory (timeout={timeout}s)...")
+        try:
+            _client.load_collection(
+                collection_name=MILVUS_COLLECTION_NAME,
+                timeout=timeout
+            )
+        except Exception as e:
+            logger.warning(f"Load failed: {e}")
+            logger.info("Attempting to release and reload...")
+            try:
+                _client.release_collection(collection_name=MILVUS_COLLECTION_NAME)
+                _client.load_collection(
+                    collection_name=MILVUS_COLLECTION_NAME,
+                    timeout=timeout
+                )
+            except Exception as e2:
+                logger.error(f"Reload also failed: {e2}")
+                raise
+        logger.info("Collection loaded successfully.")
+    
+    return _client
 
 
 def upsert_chunks(chunks_with_embeddings):
-    """Upsert chunks with their embeddings into Pinecone.
-
-    Args:
-        chunks_with_embeddings: list of (chunk_id, embedding_vector, metadata_dict)
-    """
+    """Upsert chunks into Milvus collection (delete old first)."""
     BATCH_SIZE = 100
+    
+    zotero_chunks = {}
+    for chunk_id, embedding, metadata in chunks_with_embeddings:
+        zkey = metadata.get('zotero_key')
+        if zkey not in zotero_chunks:
+            zotero_chunks[zkey] = []
+        zotero_chunks[zkey].append((chunk_id, embedding, metadata))
+    
+    for zkey in zotero_chunks:
+        delete_by_zotero_key(zkey)
+    
     for i in range(0, len(chunks_with_embeddings), BATCH_SIZE):
         batch = chunks_with_embeddings[i:i + BATCH_SIZE]
         
         vectors = []
-        for idx, (chunk_id, embedding, metadata) in enumerate(batch):
+        for chunk_id, embedding, metadata in batch:
             clean_meta = _clean_metadata(metadata)
             
-            # Validate embedding is list of floats
             if not isinstance(embedding, list):
                 logger.warning(f"Invalid embedding type for {chunk_id}: {type(embedding)}")
                 continue
@@ -63,9 +131,9 @@ def upsert_chunks(chunks_with_embeddings):
                 continue
             
             vectors.append({
-                'id': chunk_id,
-                'values': embedding,
-                'metadata': clean_meta,
+                "chunk_id": chunk_id,
+                "embedding": embedding,
+                "metadata": clean_meta,
             })
         
         logger.info(f"Upserting batch {i // BATCH_SIZE + 1} with {len(vectors)} vectors")
@@ -74,28 +142,27 @@ def upsert_chunks(chunks_with_embeddings):
             logger.warning("No valid vectors in batch, skipping...")
             continue
         
-        # Log detailed info for last few chunks (where error occurs)
-        if i // BATCH_SIZE + 1 >= 30:  # Log batches 30+ in detail
-            logger.info(f"Batch {i // BATCH_SIZE + 1} vectors:")
-            for v in vectors[-3:]:  # Last 3 vectors in batch
-                logger.info(f"  {v['id']}: meta keys={list(v['metadata'].keys())[:10]}")
-        
         try:
-            _index.upsert(vectors=vectors)
+            _client.insert(
+                collection_name=MILVUS_COLLECTION_NAME,
+                data=vectors,
+            )
             logger.info(f"Upserted batch {i // BATCH_SIZE + 1}")
         except Exception as e:
             logger.error(f"Failed to upsert batch {i // BATCH_SIZE + 1}")
             logger.error(f"Batch index: {i} to {i + len(batch)}")
             
-            # Try to identify problematic vector by upserting individually
             for v in vectors:
                 try:
-                    _index.upsert(vectors=[v])
+                    _client.insert(
+                        collection_name=MILVUS_COLLECTION_NAME,
+                        data=[v],
+                    )
                 except Exception as ve:
-                    logger.error(f"  Problematic vector: {v['id']}")
+                    logger.error(f"  Problematic vector: {v['chunk_id']}")
                     logger.error(f"    Metadata keys: {list(v['metadata'].keys())}")
                     for mk, mv in v['metadata'].items():
-                        logger.error(f"    {mk}: type={type(mv).__name__}, value_type={type(mv).__name__}")
+                        logger.error(f"    {mk}: type={type(mv).__name__}")
                         if isinstance(mv, (str, list)):
                             logger.error(f"      repr={repr(mv)[:200]}")
                     raise e
@@ -105,33 +172,55 @@ def upsert_chunks(chunks_with_embeddings):
 
 def search(query_embedding, top_k=10, filters=None):
     """Search for similar chunks."""
-    kwargs = {
-        'vector': query_embedding,
-        'top_k': top_k,
-        'include_metadata': True,
-    }
-    if filters:
-        kwargs['filter'] = filters
-
-    results = _index.query(**kwargs)
-    return [
-        {
-            'id': match.id,
-            'score': match.score,
-            'metadata': dict(match.metadata),
-        }
-        for match in results.matches
-    ]
+    try:
+        filter_expr = _build_milvus_filter(filters) if filters else ""
+        
+        result = _client.search(
+            collection_name=MILVUS_COLLECTION_NAME,
+            data=[query_embedding],
+            limit=top_k,
+            filter=filter_expr,
+            output_fields=["metadata"],
+        )
+        
+        return [
+            {
+                'id': match.get('entity', {}).get('chunk_id'),
+                'score': 1.0 - match.get('distance', 0.0),
+                'metadata': match.get('entity', {}).get('metadata', {}),
+            }
+            for result_list in result
+            for match in result_list
+        ]
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        return []
 
 
 def delete_by_zotero_key(zotero_key):
     """Delete all chunks for a given Zotero item key."""
-    _index.delete(filter={'zotero_key': zotero_key})
+    try:
+        filter_expr = f'metadata["zotero_key"] == "{zotero_key}"'
+        _client.delete(
+            collection_name=MILVUS_COLLECTION_NAME,
+            filter=filter_expr,
+        )
+    except Exception as e:
+        logger.warning(f"Delete failed for {zotero_key}: {e}")
 
 
 def get_index_stats():
-    """Get stats about the current index."""
-    return _index.describe_index_stats()
+    """Get stats about the current collection."""
+    
+    try:
+        result = _client.query(
+            collection_name=MILVUS_COLLECTION_NAME,
+            output_fields=["count(*)"],
+        )
+        return {'total_vector_count': result[0].get('count(*)', 0) if result else 0}
+    except Exception as e:
+        logger.error(f"Stats query failed: {e}")
+        return {'total_vector_count': 0}
 
 
 def _ensure_python_type(value):
@@ -154,32 +243,28 @@ def _ensure_python_type(value):
 
 
 def _clean_metadata(metadata):
-    """Ensure all metadata values are Pinecone-compatible types."""
+    """Ensure all metadata values are JSON-serializable."""
     clean = {}
     for k, v in metadata.items():
         if v is None:
             continue
         
-        # Handle empty strings
         if isinstance(v, str):
             if v.strip() == '':
                 continue
             clean[k] = v
             continue
         
-        # Handle empty containers
         if isinstance(v, (list, dict)):
             if len(v) == 0:
                 continue
         
-        # Handle lists - filter None/empty and convert to strings
         if isinstance(v, list):
             filtered = [x for x in v if x is not None and str(x).strip() != '']
             if filtered:
                 clean[k] = [str(_ensure_python_type(x)) for x in filtered]
             continue
         
-        # Handle numeric types (including numpy scalars)
         if isinstance(v, bool):
             clean[k] = v
         elif isinstance(v, (int, float)):
@@ -188,3 +273,14 @@ def _clean_metadata(metadata):
             clean[k] = str(_ensure_python_type(v))
     
     return clean
+
+
+def _build_milvus_filter(filters):
+    """Convert filters to Milvus filter expression."""
+    parts = []
+    for key, value in filters.items():
+        if isinstance(value, str):
+            parts.append(f'metadata["{key}"] == "{value}"')
+        else:
+            parts.append(f'metadata["{key}"] == {value}')
+    return " and ".join(parts)

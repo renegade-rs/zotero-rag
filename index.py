@@ -6,10 +6,10 @@ Usage:
     python index.py --update # Incremental update (new/changed items only)
 """
 
-import sys
 from dotenv import load_dotenv
 load_dotenv()
 
+import sys
 from src.indexer import run_full_index, run_incremental_update
 from src.logging_config import setup_logging
 

@@ -11,7 +11,7 @@ from flashrank import Ranker, RerankRequest
 
 from src.config import ARCHIVE_ALIASES_FILE
 from src.embeddings import init_embeddings, embed_query
-from src.vectordb import init_pinecone, search, get_index_stats
+from src.vectordb import init_milvus, search, get_index_stats
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,12 @@ _SHORTHAND_KEYS = {'type', 'by', 'tag', 'in', 'from', 'to', 'collection', 'top'}
 
 
 def init_pipeline():
-    """Initialize embeddings, Pinecone, archive aliases, and reranker."""
+    """Initialize embeddings, Milvus, archive aliases, and reranker."""
     global _initialized, _archive_aliases, _ranker
     if _initialized:
         return
     init_embeddings()
-    init_pinecone()
+    init_milvus()
     if ARCHIVE_ALIASES_FILE.exists():
         data = json.loads(ARCHIVE_ALIASES_FILE.read_text())
         _archive_aliases = {k.lower(): v for k, v in data.get('aliases', {}).items()}

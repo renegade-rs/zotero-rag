@@ -21,6 +21,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.config import (
     LLM_PROVIDER, ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
@@ -38,6 +39,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+# Mount static files directory to serve JavaScript and other static assets
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 SYSTEM_PROMPT = """You are a research assistant helping a scholar with their research. You answer questions using ONLY the provided source documents.
 

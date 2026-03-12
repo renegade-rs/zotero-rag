@@ -41,9 +41,16 @@ EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1536"))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
-# Pinecone vector database
+# Pinecone vector database (deprecated - use Milvus instead)
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "zotero-rag")
+
+# Milvus vector database
+MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
+MILVUS_COLLECTION_NAME = os.environ.get("MILVUS_COLLECTION_NAME", "zotero_rag")
+MILVUS_INDEX_TYPE = os.environ.get("MILVUS_INDEX_TYPE", "FLAT")
+MILVUS_LOAD_COLLECTION = os.environ.get("MILVUS_LOAD_COLLECTION", "true").lower() == "true"
+MILVUS_LOAD_TIMEOUT = int(os.environ.get("MILVUS_LOAD_TIMEOUT", "120"))
 
 # LLM provider for Q&A: "anthropic", "openai", or "ollama"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
@@ -69,5 +76,8 @@ WEBDAV_URL = os.environ.get("WEBDAV_URL", "")
 WEBDAV_USERNAME = os.environ.get("WEBDAV_USERNAME", "")
 WEBDAV_PASSWORD = os.environ.get("WEBDAV_PASSWORD", "")
 WEBDAV_AUTH_TYPE = os.environ.get("WEBDAV_AUTH_TYPE", "basic").lower()
+
+# Suppress gRPC warnings (harmless but noisy startup messages)
+SUPPRESS_GRPC_WARNINGS = os.environ.get("SUPPRESS_GRPC_WARNINGS", "true").lower()
 
 

@@ -1,4 +1,4 @@
-"""Main indexing pipeline: Zotero items -> text extraction -> chunking -> embedding -> Pinecone."""
+"""Main indexing pipeline: Zotero items -> text extraction -> chunking -> embedding -> Milvus."""
 
 import json
 import logging
@@ -17,7 +17,7 @@ from src.extractors import (
 )
 from src.chunker import chunk_document, chunk_epub
 from src.embeddings import init_embeddings, embed_texts, get_embedding_dimension
-from src.vectordb import init_pinecone, upsert_chunks, delete_by_zotero_key
+from src.vectordb import init_milvus, upsert_chunks, delete_by_zotero_key
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +239,19 @@ def index_items(items, zot, collection_tree, batch_size=50):
 
 def run_full_index():
     """Full re-index of the target collection (or entire library)."""
+    import logging
+    
+    # Suppress gRPC and pymilvus warnings
+    logging.getLogger('grpc').setLevel(logging.ERROR)
+    logging.getLogger('pymilvus').setLevel(logging.ERROR)
+    
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-
+    
+    logger = logging.getLogger(__name__)
     logger.info("Initializing services...")
     init_embeddings()
     dim = get_embedding_dimension()
-    init_pinecone(dimension=dim)
+    init_milvus(dimension=dim)
 
     logger.info("Connecting to Zotero...")
     zot = get_zotero_client()
@@ -274,6 +281,12 @@ def run_full_index():
 
 def run_incremental_update():
     """Only index new/changed items since last sync."""
+    import logging
+    
+    # Suppress gRPC and pymilvus warnings
+    logging.getLogger('grpc').setLevel(logging.ERROR)
+    logging.getLogger('pymilvus').setLevel(logging.ERROR)
+    
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     state = load_sync_state()
@@ -284,7 +297,7 @@ def run_incremental_update():
 
     init_embeddings()
     dim = get_embedding_dimension()
-    init_pinecone(dimension=dim)
+    init_milvus(dimension=dim)
 
     zot = get_zotero_client()
     tree = {}
