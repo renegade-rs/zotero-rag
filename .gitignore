@@ -9,4 +9,9 @@ archive_aliases.json
 *.pyc
 .DS_Store
 .opencode
+
 logs/
+code_history_md/
+
+data/chat_history.db
+data/users.json

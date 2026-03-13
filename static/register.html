@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - Zotero Research Assistant</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #fafafa;
+            --surface: #fff;
+            --border: #e5e5e5;
+            --text: #1a1a1a;
+            --text-muted: #666;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --error: #dc2626;
+            --success: #16a34a;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .register-container {
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+        }
+        .register-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+        .register-box h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+        .register-box p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            font-size: 0.95rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+        .form-group input::placeholder {
+            color: var(--text-faint);
+        }
+        .form-group .hint {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 8px;
+        }
+        .btn:hover {
+            background: var(--primary-hover);
+        }
+        .error-message {
+            padding: 12px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 6px;
+            color: var(--error);
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .error-message.visible {
+            display: block;
+        }
+        .success-message {
+            padding: 12px;
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 6px;
+            color: var(--success);
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .success-message.visible {
+            display: block;
+        }
+        .info-box {
+            padding: 12px;
+            background: #fef9c3;
+            border: 1px solid #fde047;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            color: #854d0e;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        .links {
+            margin-top: 20px;
+            text-align: center;
+        }
+        .links a {
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="register-container">
+        <div class="register-box">
+            <h1>Register Account</h1>
+            <p>Please fill in the registration form</p>
+
+            <div id="errorMessage" class="error-message"></div>
+            <div id="successMessage" class="success-message"></div>
+
+            <div class="info-box">
+                <strong>Important:</strong> Accounts require admin approval before you can start using the system.
+            </div>
+
+            <form id="registerForm">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input
+                        type="email"
+                        id="email"
+                        name="email"
+                        required
+                        autocomplete="email"
+                        placeholder="your.email@example.com"
+                    >
+                    <div class="hint">Used for account verification (optional)</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        required
+                        autocomplete="username"
+                        placeholder="Choose a username"
+                        minlength="2"
+                    >
+                    <div class="hint">Minimum 2 characters</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        required
+                        autocomplete="new-password"
+                        placeholder="Choose a password"
+                        minlength="10"
+                    >
+                    <div class="hint">Minimum 10 characters</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="confirmPassword">Confirm Password</label>
+                    <input
+                        type="password"
+                        id="confirmPassword"
+                        name="confirmPassword"
+                        required
+                        autocomplete="new-password"
+                        placeholder="Confirm your password"
+                        minlength="10"
+                    >
+                    <div class="hint">Must match the password above</div>
+                </div>
+
+                <button type="submit" class="btn">Submit Registration</button>
+            </form>
+
+            <div class="links">
+                <a href="/login.html">Already have an account? Sign in here</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const errorMessage = document.getElementById('errorMessage');
+            const successMessage = document.getElementById('successMessage');
+            errorMessage.classList.remove('visible');
+            successMessage.classList.remove('visible');
+
+            const email = document.getElementById('email').value.trim();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+
+            if (password !== confirmPassword) {
+                errorMessage.textContent = 'Passwords do not match. Please try again.';
+                errorMessage.classList.add('visible');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email,
+                        username,
+                        password
+                    }),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    successMessage.textContent = 'Registration submitted successfully! ' +
+                        'Your account will be approved by an administrator. ' +
+                        'Please check back later or check with an admin for approval status.';
+                    successMessage.classList.add('visible');
+                    document.getElementById('registerForm').style.display = 'none';
+                } else if (response.status === 400 || response.status === 422) {
+                    const textData = await response.text();
+                    try {
+                        const errorData = JSON.parse(textData);
+                        const errors = [];
+                        if (errorData.detail) {
+                            if (Array.isArray(errorData.detail)) {
+                                errorData.detail.forEach(err => {
+                                    if (err.msg) errors.push(err.msg);
+                                    if (err.description) errors.push(err.description);
+                                });
+                            } else if (typeof errorData.detail === 'string') {
+                                errors.push(errorData.detail);
+                            }
+                        }
+                        errorMessage.textContent = errors.length > 0
+                            ? errors.join('. ')
+                            : 'Registration failed. Please check your input and try again.';
+                    } catch (e) {
+                        errorMessage.textContent = textData || 'Registration failed. Please try again.';
+                    }
+                    errorMessage.classList.add('visible');
+                } else {
+                    errorMessage.textContent = 'Registration failed. Please try again.';
+                    errorMessage.classList.add('visible');
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Network error. Please check your connection and try again.';
+                errorMessage.classList.add('visible');
+                console.error('Registration error:', error);
+            }
+        });
+    </script>
+</body>
+</html>

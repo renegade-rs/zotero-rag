@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Zotero Research Assistant</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #fafafa;
+            --surface: #fff;
+            --border: #e5e5e5;
+            --text: #1a1a1a;
+            --text-muted: #666;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --error: #dc2626;
+            --success: #16a34a;
+            --warning: #f59e0b;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        .header a {
+            padding: 6px 14px;
+            font-size: 0.85rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            color: var(--text);
+            text-decoration: none;
+        }
+        .header a:hover { background: #f5f5f5; }
+        .container {
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .section h2 {
+            font-size: 1rem;
+            margin-bottom: 16px;
+            color: var(--text);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+        td { font-size: 0.9rem; }
+        .pending { color: var(--warning); font-weight: 500; }
+        .approved { color: var(--success); }
+        .admin-badge {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+        }
+        .btn {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+            border-radius: 4px;
+            cursor: pointer;
+            border: none;
+            margin-right: 6px;
+        }
+        .btn-approve {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .btn-approve:hover { background: #bbf7d0; }
+        .btn-delete {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        .btn-delete:hover { background: #fecaca; }
+        .empty-message {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 20px;
+        }
+        .error-message {
+            padding: 12px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 6px;
+            color: var(--error);
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>User Management - Zotero Research Assistant</h1>
+        <a href="/index.html">Back to Chat</a>
+    </div>
+
+    <div class="container">
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+        <div class="section">
+            <h2>Pending Approval</h2>
+            <table id="pendingTable">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Registered</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pendingBody"></tbody>
+            </table>
+            <div id="noPending" class="empty-message" style="display: none;">No pending users</div>
+        </div>
+
+        <div class="section">
+            <h2>All Users</h2>
+            <table id="usersTable">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Role</th>
+                        <th>Registered</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function loadUsers() {
+            const token = localStorage.getItem('zotero_token');
+            if (!token) {
+                window.location.href = '/login.html';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/users', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.status === 403) {
+                    showError('Access denied. Admin privileges required.');
+                    return;
+                }
+                if (!response.ok) {
+                    window.location.href = '/login.html';
+                    return;
+                }
+
+                const data = await response.json();
+                renderUsers(data.users);
+            } catch (error) {
+                console.error('Error loading users:', error);
+                showError('Failed to load users');
+            }
+        }
+
+        function renderUsers(users) {
+            const pendingBody = document.getElementById('pendingBody');
+            const usersBody = document.getElementById('usersBody');
+            const noPending = document.getElementById('noPending');
+
+            pendingBody.innerHTML = '';
+            usersBody.innerHTML = '';
+
+            const pendingUsers = users.filter(u => !u.is_approved);
+            const approvedUsers = users.filter(u => u.is_approved);
+
+            if (pendingUsers.length === 0) {
+                noPending.style.display = 'block';
+                document.getElementById('pendingTable').style.display = 'none';
+            } else {
+                noPending.style.display = 'none';
+                document.getElementById('pendingTable').style.display = 'table';
+                pendingUsers.forEach(u => {
+                    pendingBody.innerHTML += `
+                        <tr>
+                            <td>${escapeHtml(u.username)}</td>
+                            <td>${escapeHtml(u.email)}</td>
+                            <td>${formatDate(u.created_at)}</td>
+                            <td>
+                                <button class="btn btn-approve" onclick="approveUser('${u.username}')">Approve</button>
+                                <button class="btn btn-delete" onclick="deleteUser('${u.username}')">Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+
+            approvedUsers.forEach(u => {
+                usersBody.innerHTML += `
+                    <tr>
+                        <td>${escapeHtml(u.username)}</td>
+                        <td>${escapeHtml(u.email)}</td>
+                        <td class="approved">Approved</td>
+                        <td>${u.is_admin ? '<span class="admin-badge">Admin</span>' : 'User'}</td>
+                        <td>${formatDate(u.created_at)}</td>
+                        <td>
+                            ${!u.is_admin ? `<button class="btn btn-delete" onclick="deleteUser('${u.username}')">Delete</button>` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        async function approveUser(username) {
+            const token = localStorage.getItem('zotero_token');
+            try {
+                const response = await fetch(`/api/admin/users/${encodeURIComponent(username)}/approve`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    loadUsers();
+                } else {
+                    const data = await response.json();
+                    showError(data.detail || 'Failed to approve user');
+                }
+            } catch (error) {
+                showError('Network error');
+            }
+        }
+
+        async function deleteUser(username) {
+            if (!confirm(`Are you sure you want to delete user "${username}"?`)) return;
+            
+            const token = localStorage.getItem('zotero_token');
+            try {
+                const response = await fetch(`/api/admin/users/${encodeURIComponent(username)}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    loadUsers();
+                } else {
+                    const data = await response.json();
+                    showError(data.detail || 'Failed to delete user');
+                }
+            } catch (error) {
+                showError('Network error');
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        loadUsers();
+    </script>
+</body>
+</html>

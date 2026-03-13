@@ -19,10 +19,21 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from auth import (
+    authenticate_user, create_access_token, get_current_user,
+    create_user, get_user as get_auth_user, get_all_users,
+    approve_user, delete_user
+)
+from chat_history import (
+    get_user_chats, get_chat, create_chat, add_message,
+    update_chat_title, save_sources, delete_chat, sync_chat
+)
 from src.config import (
     LLM_PROVIDER, ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
     OPENAI_API_KEY, OPENAI_CHAT_MODEL,
@@ -39,6 +50,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+class RegisterRequest(BaseModel):
+    email: str
+    username: str
+    password: str
 # Mount static files directory to serve JavaScript and other static assets
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -186,15 +202,173 @@ def _get_llm_stream(messages, system_prompt):
         return _stream_ollama(messages, system_prompt)
     else:
         return _stream_openai(messages, system_prompt)
-
-
+ 
+ 
 @app.get("/")
+@app.get("/index.html")
 async def index():
     return FileResponse("static/index.html")
 
 
+@app.get("/login.html")
+async def login_page():
+    return FileResponse("static/login.html")
+
+
+@app.get("/register.html")
+async def register_page():
+    return FileResponse("static/register.html")
+
+
+@app.get("/admin.html")
+async def admin_page():
+    return FileResponse("static/admin.html")
+
+
+@app.post("/api/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Login and get JWT token."""
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": user["username"]})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user["username"],
+        "is_admin": user.get("is_admin", False)
+    }
+
+
+@app.post("/api/register")
+async def register(request: RegisterRequest):
+    """Register a new user account (requires admin approval)."""
+    existing_user = get_auth_user(request.username)
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Username already registered"
+        )
+    user = create_user(request.username, request.password, request.email)
+    if not user:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create user"
+        )
+    return {
+        "message": "Registration submitted for admin approval",
+        "username": request.username,
+        "email": request.email
+    }
+
+
+@app.get("/api/logout")
+async def logout(current_user = Depends(get_current_user)):
+    """Logout endpoint."""
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/api/me")
+async def get_me(current_user = Depends(get_current_user)):
+    """Get current user info."""
+    return {
+        "username": current_user["username"],
+        "email": current_user.get("email", ""),
+        "is_admin": current_user.get("is_admin", False),
+        "is_approved": current_user.get("is_approved", True)
+    }
+
+
+def require_admin(current_user = Depends(get_current_user)):
+    """Dependency that requires the user to be an admin."""
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+
+@app.get("/api/admin/users")
+async def list_users(admin = Depends(require_admin)):
+    """List all users (admin only)."""
+    users = get_all_users()
+    return {
+        "users": [
+            {
+                "username": u["username"],
+                "email": u.get("email", ""),
+                "is_admin": u.get("is_admin", False),
+                "is_approved": u.get("is_approved", True),
+                "created_at": u.get("created_at", "")
+            }
+            for u in users
+        ]
+    }
+
+
+@app.post("/api/admin/users/{username}/approve")
+async def approve_user_endpoint(username: str, admin = Depends(require_admin)):
+    """Approve a pending user (admin only)."""
+    if approve_user(username):
+        return {"message": f"User {username} approved"}
+    raise HTTPException(status_code=404, detail="User not found")
+
+
+@app.delete("/api/admin/users/{username}")
+async def delete_user_endpoint(username: str, admin = Depends(require_admin)):
+    """Delete a user (admin only)."""
+    if delete_user(username):
+        return {"message": f"User {username} deleted"}
+    raise HTTPException(status_code=404, detail="User not found")
+
+
+@app.get("/api/chats")
+async def list_chats(current_user = Depends(get_current_user)):
+    """List all chats for the current user."""
+    chats = get_user_chats(current_user["username"])
+    return {"chats": chats}
+
+
+@app.get("/api/chats/{chat_id}")
+async def get_chat_endpoint(chat_id: str, current_user = Depends(get_current_user)):
+    """Get a specific chat with messages."""
+    chat = get_chat(chat_id, current_user["username"])
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return chat
+
+
+class SyncChatRequest(BaseModel):
+    title: str
+    messages: list
+    sources: list
+
+
+@app.post("/api/chats/{chat_id}/sync")
+async def sync_chat_endpoint(chat_id: str, request: SyncChatRequest, current_user = Depends(get_current_user)):
+    """Sync a chat (create or update with all messages)."""
+    sync_chat(
+        chat_id,
+        current_user["username"],
+        request.title,
+        request.messages,
+        request.sources
+    )
+    return {"message": "Chat synced"}
+
+
+@app.delete("/api/chats/{chat_id}")
+async def delete_chat_endpoint(chat_id: str, current_user = Depends(get_current_user)):
+    """Delete a chat."""
+    if delete_chat(chat_id, current_user["username"]):
+        return {"message": "Chat deleted"}
+    raise HTTPException(status_code=404, detail="Chat not found")
+
+
 @app.get("/api/filters")
-async def filters():
+async def filters(current_user = Depends(get_current_user)):
     """Return available filter values for sidebar dropdowns."""
     aliases = get_archive_aliases()
 
@@ -218,7 +392,7 @@ async def filters():
 
 
 @app.post("/api/chat")
-async def chat(request: Request):
+async def chat(request: Request, current_user = Depends(get_current_user)):
     """Search + stream LLM response via SSE."""
     body = await request.json()
     message = body.get('message', '').strip()

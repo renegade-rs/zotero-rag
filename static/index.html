@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zotero Research Assistant</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
     <script src="/static/marked.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,11 +42,25 @@
             border-bottom: 1px solid var(--border);
             background: var(--surface);
             height: 50px;
+            position: relative;
         }
         .header h1 {
             font-size: 1.1rem;
             font-weight: 600;
             color: #333;
+        }
+        .header .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header .username {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text);
+        }
+        .header .username.admin {
+            color: var(--accent-amber-text);
         }
         .header button {
             padding: 6px 14px;
@@ -57,6 +72,14 @@
             color: var(--text);
         }
         .header button:hover { background: #f5f5f5; }
+        .header button.logout-btn {
+            background: #fef2f2;
+            border-color: #fecaca;
+            color: #dc2626;
+        }
+        .header button.logout-btn:hover {
+            background: #fee2e2;
+        }
 
         /* Main layout */
         .main {
@@ -444,10 +467,15 @@
         <div class="header-buttons">
             <button onclick="toggleHistoryPanel()">History</button>
             <button onclick="newChat()">New Chat</button>
+            <div class="history-backdrop" id="history-backdrop" onclick="toggleHistoryPanel()"></div>
             <div class="history-panel" id="history-panel"></div>
         </div>
+        <div class="user-info">
+            <span id="username-display" class="username admin">Loading...</span>
+            <button class="logout-btn" onclick="handleLogout()">Logout</button>
+        </div>
     </div>
-    <div class="history-backdrop" id="history-backdrop" onclick="toggleHistoryPanel()"></div>
+
 
     <div class="main">
         <!-- Filters sidebar -->
@@ -491,9 +519,9 @@
                 <label for="f-topk">Results</label>
                 <select id="f-topk">
                     <option value="5">5</option>
-                    <option value="10" selected>10</option>
+                    <option value="10">10</option>
                     <option value="15">15</option>
-                    <option value="20">20</option>
+                    <option value="20" selected>20</option>
                 </select>
             </div>
 
@@ -545,7 +573,7 @@
         let currentSources = [];
         let isStreaming = false;
         let currentChatId = null;
-        const HISTORY_KEY = 'zotero-chat-history';
+        let currentUser = null;
 
         function autoResize(el) {
             el.style.height = 'auto';
@@ -561,7 +589,13 @@
 
         async function loadFilters() {
             try {
-                const res = await fetch('/api/filters');
+                const token = localStorage.getItem('zotero_token');
+                const res = await fetch('/api/filters', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) {
+                    throw new Error(`HTTP error: ${res.status}`);
+                }
                 const data = await res.json();
 
                 const archSel = document.getElementById('f-archive');
@@ -714,9 +748,16 @@
 
         async function sendMessage() {
             if (isStreaming) return;
+            console.log('SendMessage called');
+
             const input = document.getElementById('user-input');
             const text = input.value.trim();
-            if (!text) return;
+            if (!text) {
+                console.log('Empty message, not sending');
+                return;
+            }
+
+            console.log('Sending message:', text);
 
             input.value = '';
             autoResize(input);
@@ -732,9 +773,17 @@
             const thinkingDiv = addMessage('assistant', '<span class="thinking-indicator">Searching sources...</span>');
 
             try {
+                const token = localStorage.getItem('zotero_token');
+                if (!token) {
+                    throw new Error('Not authenticated');
+                }
+
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
                     body: JSON.stringify({
                         message: text,
                         conversation: conversation.slice(0, -1),
@@ -815,57 +864,76 @@
             document.getElementById('user-input').focus();
         }
 
-        // --- Chat history persistence ---
+        // --- Chat history persistence (server-side) ---
 
-        function getHistoryData() {
+        let serverChats = [];
+
+        async function fetchChats() {
             try {
-                return JSON.parse(localStorage.getItem(HISTORY_KEY)) || { chats: [], currentChatId: null };
-            } catch { return { chats: [], currentChatId: null }; }
+                const token = localStorage.getItem('zotero_token');
+                const response = await fetch('/api/chats', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    serverChats = data.chats || [];
+                }
+            } catch (error) {
+                console.error('Failed to fetch chats:', error);
+            }
         }
 
-        function setHistoryData(data) {
-            localStorage.setItem(HISTORY_KEY, JSON.stringify(data));
-        }
-
-        function saveHistory() {
-            const data = getHistoryData();
-            if (currentChatId && conversation.length > 0) {
-                const existing = data.chats.find(c => c.id === currentChatId);
-                const firstUserMsg = conversation.find(m => m.role === 'user');
-                const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New chat';
-                if (existing) {
-                    existing.title = title;
-                    existing.updatedAt = Date.now();
-                    existing.messages = conversation.slice();
-                    existing.sources = currentSources.slice();
-                } else {
-                    data.chats.push({
-                        id: currentChatId,
-                        title: title,
-                        updatedAt: Date.now(),
+        async function saveHistory() {
+            if (!currentChatId || conversation.length === 0) return;
+            
+            const firstUserMsg = conversation.find(m => m.role === 'user');
+            const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New chat';
+            
+            try {
+                const token = localStorage.getItem('zotero_token');
+                await fetch(`/api/chats/${currentChatId}/sync`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        title,
                         messages: conversation.slice(),
                         sources: currentSources.slice()
-                    });
-                }
+                    })
+                });
+            } catch (error) {
+                console.error('Failed to save chat:', error);
             }
-            data.currentChatId = currentChatId;
-            data.chats.sort((a, b) => b.updatedAt - a.updatedAt);
-            setHistoryData(data);
         }
 
-        function loadHistory() {
-            const data = getHistoryData();
-            if (data.currentChatId) {
-                const chat = data.chats.find(c => c.id === data.currentChatId);
-                if (chat && chat.messages.length > 0) {
+        async function loadHistory() {
+            await fetchChats();
+            
+            if (serverChats.length > 0) {
+                const latestChat = serverChats[0];
+                await loadChat(latestChat.id);
+            }
+        }
+
+        async function loadChat(chatId) {
+            try {
+                const token = localStorage.getItem('zotero_token');
+                const response = await fetch(`/api/chats/${chatId}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                    const chat = await response.json();
                     currentChatId = chat.id;
-                    conversation = chat.messages.slice();
+                    conversation = (chat.messages || []).slice();
                     currentSources = (chat.sources || []).slice();
                     replayMessages();
-                    return;
                 }
+            } catch (error) {
+                console.error('Failed to load chat:', error);
             }
-            currentChatId = null;
         }
 
         function replayMessages() {
@@ -886,44 +954,46 @@
             }
         }
 
-        function switchChat(id) {
+        async function switchChat(id) {
             if (id === currentChatId) {
                 toggleHistoryPanel();
                 return;
             }
-            saveHistory();
-            const data = getHistoryData();
-            const chat = data.chats.find(c => c.id === id);
-            if (!chat) return;
-            currentChatId = chat.id;
-            conversation = chat.messages.slice();
-            currentSources = (chat.sources || []).slice();
-            data.currentChatId = currentChatId;
-            setHistoryData(data);
-            replayMessages();
+            await saveHistory();
+            await loadChat(id);
+            await fetchChats();
             toggleHistoryPanel();
         }
 
-        function deleteChat(id, evt) {
+        async function deleteChatServer(id, evt) {
             evt.stopPropagation();
             if (!confirm('Delete this chat?')) return;
-            const data = getHistoryData();
-            data.chats = data.chats.filter(c => c.id !== id);
-            if (currentChatId === id) {
-                currentChatId = null;
-                conversation = [];
-                currentSources = [];
-                data.currentChatId = null;
-                const msgs = document.getElementById('messages');
-                msgs.innerHTML = `<div class="sources-empty" id="welcome-msg" style="margin-top: 100px; color: #999;">
-                    Ask a question about your Zotero library.<br>
-                    <span style="font-size: 0.8rem;">Responses are grounded in your indexed sources.</span>
-                </div>`;
-                document.getElementById('sources-list').innerHTML =
-                    '<div class="sources-empty">Sources will appear here after your first query.</div>';
+            
+            try {
+                const token = localStorage.getItem('zotero_token');
+                await fetch(`/api/chats/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (currentChatId === id) {
+                    currentChatId = null;
+                    conversation = [];
+                    currentSources = [];
+                    const msgs = document.getElementById('messages');
+                    msgs.innerHTML = `<div class="sources-empty" id="welcome-msg" style="margin-top: 100px; color: #999;">
+                        Ask a question about your Zotero library.<br>
+                        <span style="font-size: 0.8rem;">Responses are grounded in your indexed sources.</span>
+                    </div>`;
+                    document.getElementById('sources-list').innerHTML =
+                        '<div class="sources-empty">Sources will appear here after your first query.</div>';
+                }
+                
+                await fetchChats();
+                renderHistoryList();
+            } catch (error) {
+                console.error('Failed to delete chat:', error);
             }
-            setHistoryData(data);
-            renderHistoryList();
         }
 
         function toggleHistoryPanel() {
@@ -941,25 +1011,29 @@
         }
 
         function renderHistoryList() {
-            const data = getHistoryData();
             const panel = document.getElementById('history-panel');
-            if (data.chats.length === 0) {
+            if (serverChats.length === 0) {
                 panel.innerHTML = '<div class="history-panel-empty">No chat history yet.</div>';
                 return;
             }
-            panel.innerHTML = data.chats.map(chat => {
-                const msgCount = chat.messages.filter(m => m.role === 'user').length;
-                const date = new Date(chat.updatedAt);
-                const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            panel.innerHTML = serverChats.map(chat => {
+                const msgCount = chat.message_count || 0;
+                const dateStr = formatDate(chat.updated_at);
                 const isActive = chat.id === currentChatId;
                 return `<div class="history-item${isActive ? ' active' : ''}" onclick="switchChat('${chat.id}')">
                     <div class="history-item-info">
                         <div class="history-item-title">${escapeHtml(chat.title)}</div>
                         <div class="history-item-meta">${dateStr} &middot; ${msgCount} message${msgCount !== 1 ? 's' : ''}</div>
                     </div>
-                    <button class="history-item-delete" onclick="deleteChat('${chat.id}', event)" title="Delete">&times;</button>
+                    <button class="history-item-delete" onclick="deleteChatServer('${chat.id}', event)" title="Delete">&times;</button>
                 </div>`;
             }).join('');
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         }
 
         const origSendMessage = sendMessage;
@@ -970,10 +1044,88 @@
             return origSendMessage();
         };
 
-        // Initialize
-        loadFilters();
-        loadHistory();
-        document.getElementById('user-input').focus();
+        // Authentication
+        async function checkLogin() {
+            const token = localStorage.getItem('zotero_token');
+            if (!token) {
+                window.location.href = '/login.html';
+                return false;
+            }
+
+            try {
+                const meResponse = await fetch('/api/me', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (meResponse.status === 401) {
+                    window.location.href = '/login.html';
+                    return false;
+                }
+
+                const userData = await meResponse.json();
+                currentUser = userData.username;
+                loadUserInfo(userData.username, userData.is_admin);
+                
+                if (userData.is_admin) {
+                    showAdminLink();
+                }
+                
+                return true;
+            } catch (error) {
+                console.error('Login check error:', error);
+                window.location.href = '/login.html';
+                return false;
+            }
+        }
+
+        function loadUserInfo(username, isAdmin = false) {
+            currentUser = username;
+            const usernameDisplay = document.getElementById('username-display');
+            if (usernameDisplay) {
+                usernameDisplay.textContent = username;
+                if (isAdmin) {
+                    usernameDisplay.classList.add('admin');
+                } else {
+                    usernameDisplay.classList.remove('admin');
+                }
+            }
+        }
+
+        function showAdminLink() {
+            const userInfo = document.querySelector('.user-info');
+            if (userInfo) {
+                const adminLink = document.createElement('a');
+                adminLink.href = '/admin.html';
+                adminLink.className = 'admin-link';
+                adminLink.textContent = 'Admin';
+                adminLink.style.cssText = 'padding: 6px 14px; font-size: 0.85rem; background: var(--accent-amber); border: 1px solid #fcd34d; border-radius: 6px; color: var(--accent-amber-text); text-decoration: none;';
+                userInfo.insertBefore(adminLink, userInfo.firstChild);
+            }
+        }
+
+        async function handleLogout() {
+            try {
+                const response = await fetch('/api/logout', {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('zotero_token')}` }
+                });
+            } finally {
+                localStorage.removeItem('zotero_token');
+                window.location.href = '/login.html';
+            }
+        }
+
+        async function initialize() {
+            const authenticated = await checkLogin();
+            if (!authenticated) {
+                return;
+            }
+            loadFilters();
+            await loadHistory();
+            document.getElementById('user-input').focus();
+        }
+
+        // Initialize on page load
+        initialize();
     </script>
 </body>
 </html>
