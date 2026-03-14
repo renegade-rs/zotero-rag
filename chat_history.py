@@ -273,4 +273,9 @@ def sync_chat(chat_id: str, username: str, title: str, messages: list[dict], sou
     conn.close()
 
 
+def get_chat_for_download(chat_id: str, username: str) -> Optional[dict]:
+    """Get chat data formatted for download (same as get_chat)."""
+    return get_chat(chat_id, username)
+
+
 init_db()

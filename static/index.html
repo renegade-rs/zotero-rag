@@ -467,6 +467,7 @@
         <div class="header-buttons">
             <button onclick="toggleHistoryPanel()">History</button>
             <button onclick="newChat()">New Chat</button>
+            <button onclick="downloadChat()" id="download-btn" style="display: none;">Download</button>
             <div class="history-backdrop" id="history-backdrop" onclick="toggleHistoryPanel()"></div>
             <div class="history-panel" id="history-panel"></div>
         </div>
@@ -657,6 +658,38 @@
             </div>`;
             document.getElementById('sources-list').innerHTML =
                 '<div class="sources-empty">Sources will appear here after your first query.</div>';
+            document.getElementById('download-btn').style.display = 'none';
+        }
+
+        async function downloadChat() {
+            if (!currentChatId) {
+                alert('No chat to download');
+                return;
+            }
+            
+            try {
+                const token = localStorage.getItem('zotero_token');
+                const response = await fetch(`/api/chat/download?chat_id=${encodeURIComponent(currentChatId)}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Download failed: ${response.status}`);
+                }
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `chat_${currentChatId}.odt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (e) {
+                console.error('Failed to download chat:', e);
+                alert('Failed to download chat: ' + e.message);
+            }
         }
 
         function addMessage(role, html) {
@@ -852,6 +885,7 @@
                                 if (evt.type === 'sources') {
                                     renderSources(evt.sources);
                                     thinkingDiv.innerHTML = '<span class="thinking-indicator">Generating response...</span>';
+                                    document.getElementById('download-btn').style.display = 'inline-block';
                                 } else if (evt.type === 'delta') {
                                     if (thinkingDiv.querySelector('.thinking-indicator')) {
                                         thinkingDiv.innerHTML = '';
@@ -1018,6 +1052,10 @@
             } else {
                 document.getElementById('sources-list').innerHTML =
                     '<div class="sources-empty">Sources will appear here after your next query.</div>';
+            }
+            
+            if (currentSources.length > 0) {
+                document.getElementById('download-btn').style.display = 'inline-block';
             }
             
             for (const msg of conversation) {

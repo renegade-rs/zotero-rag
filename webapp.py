@@ -13,14 +13,24 @@ Then open http://localhost:5001 in your browser.
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
+from datetime import datetime
+from io import BytesIO
+
+# ODF/OOo imports for file export
+from odf.opendocument import OpenDocumentText
+from odf.style import Style, TextProperties, ParagraphProperties
+from odf.text import H, P, List, ListItem, Span
+from odf.table import Table, TableRow, TableCell
+from odf.namespaces import TEXTNS
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -32,7 +42,8 @@ from auth import (
 )
 from chat_history import (
     get_user_chats, get_chat, create_chat, add_message,
-    update_chat_title, save_sources, delete_chat, sync_chat
+    update_chat_title, save_sources, delete_chat, sync_chat,
+    get_chat_for_download
 )
 from src.config import (
     LLM_PROVIDER, ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
@@ -141,6 +152,437 @@ def _format_source_for_client(result):
         'zotero_key': zotero_key,
         'chunk_index': meta.get('chunk_index', 0),
     }
+
+def _parse_markdown_to_odt_content(markdown_text: str) -> str:
+    """Convert markdown to HTML for ODT conversion.
+    Strips most markdown syntax while preserving structure."""
+    
+    text = markdown_text
+    
+    # Convert headers (preserve hierarchy)
+    text = re.sub(r'^######\s+(.+)$', '<h6>\\1</h6>', text, flags=re.MULTILINE)
+    text = re.sub(r'^#####\s+(.+)$', '<h5>\\1</h5>', text, flags=re.MULTILINE)
+    text = re.sub(r'^####\s+(.+)$', '<h4>\\1</h4>', text, flags=re.MULTILINE)
+    text = re.sub(r'^###\s+(.+)$', '<h3>\\1</h3>', text, flags=re.MULTILINE)
+    text = re.sub(r'^##\s+(.+)$', '<h2>\\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'^#\s+(.+)$', '<h1>\\1</h1>', text, flags=re.MULTILINE)
+    
+    # Convert bold/italic
+    text = re.sub(r'\*\*\*(.+?)\*\*\*', '<strong><em>\\1</em></strong>', text)
+    text = re.sub(r'___(.+?)___', '<strong><em>\\1</em></strong>', text)
+    text = re.sub(r'\*\*(.+?)\*\*', '<strong>\\1</strong>', text)
+    text = re.sub(r'__(.+?)__', '<strong>\\1</strong>', text)
+    text = re.sub(r'\*(.+?)\*', '<em>\\1</em>', text)
+    text = re.sub(r'_(.+?)_', '<em>\\1</em>', text)
+    
+    # Convert code blocks
+    text = re.sub(r'```(\w+)?\n(.+?)```', '<pre>\\2</pre>', text, flags=re.DOTALL)
+    text = re.sub(r'`(.+?)`', '<code>\\1</code>', text)
+    
+    # Convert blockquotes
+    text = re.sub(r'^>\s+(.+)$', '<blockquote>\\1</blockquote>', text, flags=re.MULTILINE)
+    
+    # Convert unordered lists
+    text = re.sub(r'^\s{0,3}\*\s+(.+)$', '<ul><li>\\1</li></ul>', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s{0,3}-\s+(.+)$', '<ul><li>\\1</li></ul>', text, flags=re.MULTILINE)
+    
+    # Convert ordered lists
+    text = re.sub(r'^\s{0,3}\d+\.\s+(.+)$', '<ol><li>\\1</li></ol>', text, flags=re.MULTILINE)
+    
+    # Convert links
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', '<a href="\\2">\\1</a>', text)
+    
+    # Convert horizontal rules
+    text = re.sub(r'^---+$', '<hr/>', text, flags=re.MULTILINE)
+    text = re.sub(r'^\*\*\*+$', '<hr/>', text, flags=re.MULTILINE)
+    
+    return text
+
+
+def _format_sources_section(sources: list) -> str:
+    """Format sources as markdown for the sources section."""
+    if not sources:
+        return ""
+    
+    lines = ["\n## Sources\n"]
+    for src in sources:
+        authors = ', '.join(src.get('authors', [])) or 'Unknown'
+        title = src.get('title', 'Untitled')
+        date = src.get('date', '')
+        item_type = src.get('item_type', '')
+        page_info = ''
+        if src.get('page_start'):
+            page_end = src.get('page_end', src.get('page_start'))
+            if page_end > src.get('page_start', 0):
+                page_info = f", pp. {src['page_start']}-{page_end}"
+            else:
+                page_info = f", p. {src['page_start']}"
+        
+        lines.append(f"### [{src.get('source_num', '')}] {title}")
+        lines.append(f"- **Authors:** {authors}")
+        if date:
+            lines.append(f"- **Date:** {date}")
+        lines.append(f"- **Type:** {item_type}{page_info}")
+        if src.get('archive'):
+            lines.append(f"- **Archive:** {src['archive']}")
+        if src.get('archive_location'):
+            lines.append(f"- **Location:** {src['archive_location']}")
+        if src.get('text'):
+            preview = src['text'][:500] + ('...' if len(src['text']) > 500 else '')
+            lines.append(f"- **Preview:** {preview}")
+        lines.append("")
+    
+    return '\n'.join(lines)
+
+
+def _chat_to_odt(chat_data: dict) -> BytesIO:
+    """Convert chat messages and sources to ODT format."""
+    
+    doc = OpenDocumentText()
+    
+    # Style definitions
+    h1_style = Style(name="H1", family="paragraph")
+    h1_style.addElement(TextProperties(fontsize='18pt', fontweight='bold'))
+    doc.styles.addElement(h1_style)
+    
+    h2_style = Style(name="H2", family="paragraph")
+    h2_style.addElement(TextProperties(fontsize='16pt', fontweight='bold'))
+    doc.styles.addElement(h2_style)
+    
+    h3_style = Style(name="H3", family="paragraph")
+    h3_style.addElement(TextProperties(fontsize='14pt', fontweight='bold'))
+    doc.styles.addElement(h3_style)
+    
+    user_msg_style = Style(name="UserMessage", family="paragraph")
+    user_msg_style.addElement(ParagraphProperties(marginleft='20pt'))
+    user_msg_style.addElement(TextProperties(color='#1a1a1a', fontweight='bold'))
+    doc.styles.addElement(user_msg_style)
+    
+    assistant_msg_style = Style(name="AssistantMessage", family="paragraph")
+    assistant_msg_style.addElement(ParagraphProperties(marginleft='0pt'))
+    doc.styles.addElement(assistant_msg_style)
+    
+    source_style = Style(name="Source", family="paragraph")
+    source_style.addElement(ParagraphProperties(marginleft='20pt'))
+    source_style.addElement(TextProperties(fontsize='9pt', color='#666'))
+    doc.styles.addElement(source_style)
+    
+    list_unordered_style = Style(name="ListUnordered", family="paragraph")
+    list_unordered_style.addElement(ParagraphProperties(marginleft='3.8cm'))
+    doc.styles.addElement(list_unordered_style)
+    
+    list_ordered_style = Style(name="ListOrdered", family="paragraph")
+    list_ordered_style.addElement(ParagraphProperties(marginleft='3.8cm'))
+    doc.styles.addElement(list_ordered_style)
+    
+    listitem_style = Style(name="ListItem", family="paragraph")
+    listitem_style.addElement(ParagraphProperties(marginleft='2.5cm'))
+    doc.styles.addElement(listitem_style)
+    
+    bold_style = Style(name="bold", family="text")
+    bold_style.addElement(TextProperties(fontweight='bold'))
+    doc.styles.addElement(bold_style)
+    
+    italic_style = Style(name="italic", family="text")
+    italic_style.addElement(TextProperties(fontstyle='italic'))
+    doc.styles.addElement(italic_style)
+    
+    bold_italic_style = Style(name="bold-italic", family="text")
+    bold_italic_style.addElement(TextProperties(fontweight='bold', fontstyle='italic'))
+    doc.styles.addElement(bold_italic_style)
+    
+    code_style = Style(name="code", family="text")
+    code_style.addElement(TextProperties(fontfamily='monospace', fontsize='10pt', color='#333'))
+    doc.styles.addElement(code_style)
+    
+    # Build chat content
+    title = chat_data.get('title', 'Chat')
+    messages = chat_data.get('messages', [])
+    sources = chat_data.get('sources', [])
+    
+    # Add title
+    doc.text.addElement(H(outlinelevel=1, text=title))
+    
+    # Add date/time
+    doc.text.addElement(P(text=f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"))
+    doc.text.addElement(P(text=" "))
+    
+    # Add messages
+    for msg in messages:
+        role = msg.get('role', '')
+        content = msg.get('content', '')
+        
+        if role == 'user':
+            # User message
+            p = P(stylename=user_msg_style)
+            p.addText(f"User: {content}")
+            doc.text.addElement(p)
+        elif role == 'assistant':
+            # Assistant message - parse markdown with proper ODT structures
+            import re
+            
+            lines = content.split('\n')
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                
+                # Headers
+                if line.startswith('# '):
+                    text = re.sub(r'^#\s+(.+)$', r'\1', line)
+                    doc.text.addElement(H(outlinelevel=1, text=text))
+                    i += 1
+                    continue
+                
+                if line.startswith('## '):
+                    text = re.sub(r'^##\s+(.+)$', r'\1', line)
+                    doc.text.addElement(H(outlinelevel=2, text=text))
+                    i += 1
+                    continue
+                
+                if line.startswith('### '):
+                    text = re.sub(r'^###\s+(.+)$', r'\1', line)
+                    doc.text.addElement(H(outlinelevel=3, text=text))
+                    i += 1
+                    continue
+                
+                # Blockquotes
+                if line.startswith('> '):
+                    text = re.sub(r'^>\s+(.+)$', r'\1', line)
+                    p = P(stylename=assistant_msg_style)
+                    _parse_inline_markdown(p, text)
+                    doc.text.addElement(p)
+                    i += 1
+                    continue
+                
+                # Unordered lists (bullets)
+                if re.match(r'^\s*\*\s+', line) or re.match(r'^\s*-\s+', line):
+                    mylist = List()
+                    while i < len(lines) and (re.match(r'^\s*\*\s+', lines[i]) or re.match(r'^\s*-\s+', lines[i])):
+                        list_item_text = re.sub(r'^\s*[\*-]\s+', '', lines[i])
+                        item = ListItem()
+                        p = P()
+                        _parse_inline_markdown(p, list_item_text)
+                        item.addElement(p)
+                        mylist.addElement(item)
+                        i += 1
+                    doc.text.addElement(mylist)
+                    continue
+                
+                # Ordered lists (numbers)
+                if re.match(r'^\s*\d+\.\s+', line):
+                    mylist = List()
+                    while i < len(lines) and re.match(r'^\s*\d+\.\s+', lines[i]):
+                        list_item_text = re.sub(r'^\s*\d+\.\s+', '', lines[i])
+                        item = ListItem()
+                        p = P()
+                        _parse_inline_markdown(p, list_item_text)
+                        item.addElement(p)
+                        mylist.addElement(item)
+                        i += 1
+                    doc.text.addElement(mylist)
+                    continue
+                
+                # Tables (| syntax)
+                if re.match(r'^\s*\|.*\|\s*$', line):
+                    table, row_count = _parse_markdown_table(lines[i:])
+                    if table:
+                        doc.text.addElement(table)
+                        i += row_count
+                    else:
+                        p = P(stylename=assistant_msg_style)
+                        p.addText(line)
+                        doc.text.addElement(p)
+                        i += 1
+                    continue
+                
+                # Regular paragraphs
+                if line.strip():
+                    p = P(stylename=assistant_msg_style)
+                    _parse_inline_markdown(p, line)
+                    doc.text.addElement(p)
+                
+                i += 1
+        
+        doc.text.addElement(P(text=" "))
+    
+    # Add sources section if available
+    if sources:
+        doc.text.addElement(H(outlinelevel=2, text="Sources"))
+        
+        for i, src in enumerate(sources, 1):
+            p = P(stylename=source_style)
+            
+            authors = ', '.join(src.get('authors', [])) or 'Unknown'
+            title = src.get('title', 'Untitled')
+            date = src.get('date', '')
+            
+            source_text = f"[{i}] {title} -- {authors}"
+            if date:
+                source_text += f" ({date})"
+            
+            p.addText(source_text)
+            doc.text.addElement(p)
+            
+            if src.get('page_start'):
+                p_page = P(text=f"  Pages: {src['page_start']}")
+                if src.get('page_end') and src['page_end'] != src['page_start']:
+                    p_page.addText(f"-{src['page_end']}")
+                doc.text.addElement(p_page)
+            
+            if src.get('item_type'):
+                p_type = P(text=f"  Type: {src['item_type']}")
+                doc.text.addElement(p_type)
+            
+            if src.get('archive'):
+                p_archive = P(text=f"  Archive: {src['archive']}")
+                doc.text.addElement(p_archive)
+            
+            p_sep = P(text="  ")
+            doc.text.addElement(p_sep)
+    
+    # Save to BytesIO
+    output = BytesIO()
+    doc.save(output)
+    output.seek(0)
+    
+    return output
+
+
+def _parse_inline_markdown(paragraph: P, text: str) -> P:
+    """Parse inline markdown (bold, italic, code) and add to paragraph as spans."""
+    import re
+    
+    while text:
+        match = None
+        
+        # Bold + italic (***/___)
+        match = re.match(r'\*\*\*(.+?)\*\*\*', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'bold-italic')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        match = re.match(r'___(.+?)___', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'bold-italic')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Bold (** or __)
+        match = re.match(r'\*\*(.+?)\*\*', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'bold')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        match = re.match(r'__(.+?)__', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'bold')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Italic (* or _)
+        match = re.match(r'\*(.+?)\*', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'italic')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        match = re.match(r'_(.+?)_', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'italic')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Inline code
+        match = re.match(r'`(.+?)`', text)
+        if match:
+            span = Span(text=match.group(1))
+            span.setAttrNS(TEXTNS, 'style-name', 'code')
+            paragraph.addElement(span)
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Regular text
+        match = re.match(r'([^*_\`]+)', text)
+        if match:
+            paragraph.addText(match.group(1))
+            text = text[len(match.group(0)):]
+            continue
+    
+    return paragraph
+
+
+def _parse_markdown_table(lines: list) -> tuple:
+    """Parse markdown table and return (Table element, number of lines consumed)."""
+    import re
+    
+    if not lines or not re.match(r'^\s*\|.*\|\s*$', lines[0]):
+        return (None, 0)
+    
+    # Parse header
+    header_line = lines[0].strip()
+    if header_line.endswith('|'):
+        header_line = header_line[:-1]
+    if header_line.startswith('|'):
+        header_line = header_line[1:]
+    headers = [h.strip() for h in header_line.split('|')]
+    
+    # Parse separator (optional)
+    separator_lines = 1
+    if len(lines) > 1 and re.match(r'^\s*\|\s*[-:]+', lines[1]):
+        separator_lines = 2
+    
+    # Parse rows
+    rows = []
+    i = separator_lines
+    while i < len(lines) and re.match(r'^\s*\|.*\|\s*$', lines[i]):
+        row_line = lines[i].strip()
+        if row_line.endswith('|'):
+            row_line = row_line[:-1]
+        if row_line.startswith('|'):
+            row_line = row_line[1:]
+        cells = [c.strip() for c in row_line.split('|')]
+        rows.append(cells)
+        i += 1
+    
+    # Create ODT table
+    table = Table(name="Table1")
+    
+    # Header row
+    header_row = TableRow()
+    for header in headers:
+        cell = TableCell()
+        p = P()
+        _parse_inline_markdown(p, header)
+        cell.addElement(p)
+        header_row.addElement(cell)
+    table.addElement(header_row)
+    
+    # Data rows
+    for row in rows:
+        data_row = TableRow()
+        for cell_text in row:
+            cell = TableCell()
+            p = P()
+            _parse_inline_markdown(p, cell_text)
+            cell.addElement(p)
+            data_row.addElement(cell)
+        table.addElement(data_row)
+    
+    return (table, i)
 
 
 def _stream_anthropic(messages, system_prompt):
@@ -475,6 +917,32 @@ async def chat(request: Request, current_user = Depends(get_current_user)):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+
+
+@app.get("/api/chat/download")
+async def download_chat(
+    chat_id: str = None,
+    current_user = Depends(get_current_user)
+):
+    """Download current chat as ODT file."""
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id parameter required")
+    
+    chat_data = get_chat(chat_id, current_user["username"])
+    if not chat_data:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    odt_content = _chat_to_odt(chat_data)
+    
+    return Response(
+        content=odt_content.getvalue(),
+        media_type="application/vnd.oasis.opendocument.text",
+        headers={
+            "Content-Disposition": f"attachment; filename=chat_{chat_id[:10]}.odt"
+        }
+    )
+
+
 @app.get("/zotero/pdf/{key}")
 async def open_pdf(key: str, page: int = 0):
     """Open a PDF in Zotero via zotero:// URL."""
@@ -520,4 +988,4 @@ if __name__ == '__main__':
     print("done.")
     print(f"Using LLM provider: {LLM_PROVIDER}")
     print("Open http://localhost:5001 in your browser.")
-    uvicorn.run(app, host="127.0.0.1", port=5001, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=5001, log_level="info")

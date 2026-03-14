@@ -15,3 +15,8 @@ code_history_md/
 
 data/chat_history.db
 data/users.json
+
+*.bak
+*.bak2
+*.backup
+webapp_original.py
