@@ -26,6 +26,12 @@ from odf.text import H, P, List, ListItem, Span
 from odf.table import Table, TableRow, TableCell
 from odf.namespaces import TEXTNS
 
+# DOCX imports
+from docx import Document
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_UNDERLINE, WD_ALIGN_PARAGRAPH
+from docx.enum.style import WD_STYLE_TYPE
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -585,6 +591,332 @@ def _parse_markdown_table(lines: list) -> tuple:
     return (table, i)
 
 
+def _parse_inline_markdown_docx(paragraph, text: str):
+    """Parse inline markdown and add to docx paragraph as runs."""
+    import re
+    
+    while text:
+        match = None
+        
+        # Bold + italic (***/___)
+        match = re.match(r'\*\*\*(.+?)\*\*\*', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.bold = True
+            run.italic = True
+            text = text[len(match.group(0)):]
+            continue
+        
+        match = re.match(r'___(.+?)___', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.bold = True
+            run.italic = True
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Bold (** or __)
+        match = re.match(r'\*\*(.+?)\*\*', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.bold = True
+            text = text[len(match.group(0)):]
+            continue
+        
+        match = re.match(r'__(.+?)__', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.bold = True
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Italic (* or _)
+        match = re.match(r'\*(.+?)\*', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.italic = True
+            text = text[len(match.group(0)):]
+            continue
+        
+        match = re.match(r'_(.+?)_', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.italic = True
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Underline (_text_)
+        match = re.match(r'_([^_\s]+)_', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.underline = WD_UNDERLINE.SINGLE
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Inline code
+        match = re.match(r'`(.+?)`', text)
+        if match:
+            run = paragraph.add_run(match.group(1))
+            run.font.name = 'Courier New'
+            run.font.size = Pt(10)
+            text = text[len(match.group(0)):]
+            continue
+        
+        # Regular text
+        match = re.match(r'([^*_\`]+)', text)
+        if match:
+            paragraph.add_run(match.group(1))
+            text = text[len(match.group(0)):]
+            continue
+    
+    return paragraph
+
+
+def _parse_markdown_table_docx(document, lines: list):
+    """Parse markdown table and return docx table."""
+    import re
+    
+    if not lines or not re.match(r'^\s*\|.*\|\s*$', lines[0]):
+        return None
+    
+    # Parse header
+    header_line = lines[0].strip()
+    if header_line.endswith('|'):
+        header_line = header_line[:-1]
+    if header_line.startswith('|'):
+        header_line = header_line[1:]
+    headers = [h.strip() for h in header_line.split('|')]
+    
+    # Parse separator (optional)
+    separator_lines = 1
+    if len(lines) > 1 and re.match(r'^\s*\|\s*[-:]+', lines[1]):
+        separator_lines = 2
+    
+    # Parse rows
+    rows = []
+    i = separator_lines
+    while i < len(lines) and re.match(r'^\s*\|.*\|\s*$', lines[i]):
+        row_line = lines[i].strip()
+        if row_line.endswith('|'):
+            row_line = row_line[:-1]
+        if row_line.startswith('|'):
+            row_line = row_line[1:]
+        cells = [c.strip() for c in row_line.split('|')]
+        rows.append(cells)
+        i += 1
+    
+    # Create docx table
+    table = document.add_table(rows=0, cols=len(headers))
+    table.style = 'Table Grid'
+    
+    # Header row
+    header_row = table.add_row()
+    for j, header in enumerate(headers):
+        cell = header_row.cells[j]
+        p = cell.paragraphs[0]
+        _parse_inline_markdown_docx(p, header)
+    
+    # Data rows
+    for row in rows:
+        data_row = table.add_row()
+        for j, cell_text in enumerate(row):
+            cell = data_row.cells[j]
+            p = cell.paragraphs[0]
+            _parse_inline_markdown_docx(p, cell_text)
+    
+    return (table, i)
+
+
+def _chat_to_docx(chat_data: dict) -> BytesIO:
+    """Convert chat messages and sources to DOCX format."""
+    
+    doc = Document()
+    
+    # Add styles
+    styles = doc.styles
+    
+    # Heading 1 style (for main title)
+    if 'Heading 1' not in styles:
+        h1_style = styles.add_style('Heading 1', WD_STYLE_TYPE.PARAGRAPH)
+        h1_style.base_style = styles['Normal']
+        h1_font = h1_style.font
+        h1_font.size = Pt(18)
+        h1_font.bold = True
+    
+    # Heading 2 style (for H2)
+    if 'Heading 2' not in styles:
+        h2_style = styles.add_style('Heading 2', WD_STYLE_TYPE.PARAGRAPH)
+        h2_style.base_style = styles['Normal']
+        h2_font = h2_style.font
+        h2_font.size = Pt(14)
+        h2_font.bold = True
+    
+    # Heading 3 style (for H3)
+    if 'Heading 3' not in styles:
+        h3_style = styles.add_style('Heading 3', WD_STYLE_TYPE.PARAGRAPH)
+        h3_style.base_style = styles['Normal']
+        h3_font = h3_style.font
+        h3_font.size = Pt(12)
+        h3_font.bold = True
+    
+    # User message style
+    if 'UserMessage' not in styles:
+        user_style = styles.add_style('UserMessage', WD_STYLE_TYPE.PARAGRAPH)
+        user_style.base_style = styles['Normal']
+        user_para_format = user_style.paragraph_format
+        user_para_format.left_indent =Pt(0.5)
+    
+    # Assistant message style
+    if 'AssistantMessage' not in styles:
+        assistant_style = styles.add_style('AssistantMessage', WD_STYLE_TYPE.PARAGRAPH)
+        assistant_style.base_style = styles['Normal']
+    
+    # Source style
+    if 'Source' not in styles:
+        source_style = styles.add_style('Source', WD_STYLE_TYPE.PARAGRAPH)
+        source_style.base_style = styles['Normal']
+        source_font = source_style.font
+        source_font.size = Pt(9)
+        source_font.color.rgb = None  # Auto color
+        source_para_format = source_style.paragraph_format
+        source_para_format.left_indent =Pt(0.5)
+    
+    # Build chat content
+    title = chat_data.get('title', 'Chat')
+    messages = chat_data.get('messages', [])
+    sources = chat_data.get('sources', [])
+    
+    # Add title
+    doc.add_heading(title, level=1)
+    
+    # Add date/time
+    doc.add_paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    doc.add_paragraph()
+    
+    # Add messages
+    for msg in messages:
+        role = msg.get('role', '')
+        content = msg.get('content', '')
+        
+        if role == 'user':
+            # User message
+            p = doc.add_paragraph(f"User: ", style='UserMessage')
+            _parse_inline_markdown_docx(p, content)
+        elif role == 'assistant':
+            # Assistant message - parse markdown
+            lines = content.split('\n')
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                
+                # Headers
+                if line.startswith('# '):
+                    text = re.sub(r'^#\s+(.+)$', r'\1', line)
+                    doc.add_heading(text, level=1)
+                    i += 1
+                    continue
+                
+                if line.startswith('## '):
+                    text = re.sub(r'^##\s+(.+)$', r'\1', line)
+                    doc.add_heading(text, level=2)
+                    i += 1
+                    continue
+                
+                if line.startswith('### '):
+                    text = re.sub(r'^###\s+(.+)$', r'\1', line)
+                    doc.add_heading(text, level=3)
+                    i += 1
+                    continue
+                
+                # Blockquotes
+                if line.startswith('> '):
+                    text = re.sub(r'^>\s+(.+)$', r'\1', line)
+                    p = doc.add_paragraph(style='AssistantMessage')
+                    _parse_inline_markdown_docx(p, text)
+                    p.paragraph_format.left_indent =Pt(0.3)
+                    i += 1
+                    continue
+                
+                # Unordered lists (bullets)
+                if re.match(r'^\s*\*\s+', line) or re.match(r'^\s*-\s+', line):
+                    while i < len(lines) and (re.match(r'^\s*\*\s+', lines[i]) or re.match(r'^\s*-\s+', lines[i])):
+                        list_item_text = re.sub(r'^\s*[\*-]\s+', '', lines[i])
+                        p = doc.add_paragraph(style='List Bullet')
+                        _parse_inline_markdown_docx(p, list_item_text)
+                        i += 1
+                    continue
+                
+                # Ordered lists (numbers)
+                if re.match(r'^\s*\d+\.\s+', line):
+                    while i < len(lines) and re.match(r'^\s*\d+\.\s+', lines[i]):
+                        list_item_text = re.sub(r'^\s*\d+\.\s+', '', lines[i])
+                        p = doc.add_paragraph(style='List Number')
+                        _parse_inline_markdown_docx(p, list_item_text)
+                        i += 1
+                    continue
+                
+                # Tables (| syntax)
+                if re.match(r'^\s*\|.*\|\s*$', line):
+                    result = _parse_markdown_table_docx(doc, lines[i:])
+                    if result:
+                        table, row_count = result
+                        i += row_count
+                    else:
+                        p = doc.add_paragraph(style='AssistantMessage')
+                        _parse_inline_markdown_docx(p, line)
+                        i += 1
+                    continue
+                
+                # Regular paragraphs
+                if line.strip():
+                    p = doc.add_paragraph(style='AssistantMessage')
+                    _parse_inline_markdown_docx(p, line)
+                
+                i += 1
+        
+        doc.add_paragraph()
+    
+    # Add sources section if available
+    if sources:
+        doc.add_heading('Sources', level=2)
+        
+        for i, src in enumerate(sources, 1):
+            p = doc.add_paragraph(style='Source')
+            
+            authors = ', '.join(src.get('authors', [])) or 'Unknown'
+            title = src.get('title', 'Untitled')
+            date = src.get('date', '')
+            
+            source_text = f"[{i}] {title} -- {authors}"
+            if date:
+                source_text += f" ({date})"
+            
+            _parse_inline_markdown_docx(p, source_text)
+            
+            if src.get('page_start'):
+                p_page = doc.add_paragraph()
+                p_page.add_run(f"  Pages: {src['page_start']}")
+                if src.get('page_end') and src['page_end'] != src['page_start']:
+                    p_page.add_run(f"-{src['page_end']}")
+            
+            if src.get('item_type'):
+                p_type = doc.add_paragraph()
+                p_type.add_run(f"  Type: {src['item_type']}")
+            
+            if src.get('archive'):
+                p_archive = doc.add_paragraph()
+                p_archive.add_run(f"  Archive: {src['archive']}")
+            
+            doc.add_paragraph()
+    
+    # Save to BytesIO
+    output = BytesIO()
+    doc.save(output)
+    output.seek(0)
+    
+    return output
+
+
 def _stream_anthropic(messages, system_prompt):
     """Stream response from Anthropic Claude."""
     import anthropic
@@ -922,9 +1254,10 @@ async def chat(request: Request, current_user = Depends(get_current_user)):
 @app.get("/api/chat/download")
 async def download_chat(
     chat_id: str = None,
+    format: str = 'odt',
     current_user = Depends(get_current_user)
 ):
-    """Download current chat as ODT file."""
+    """Download current chat as ODT or DOCX file."""
     if not chat_id:
         raise HTTPException(status_code=400, detail="chat_id parameter required")
     
@@ -932,13 +1265,50 @@ async def download_chat(
     if not chat_data:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    odt_content = _chat_to_odt(chat_data)
+    format = format.lower()
+    
+    if format == 'docx':
+        docx_content = _chat_to_docx(chat_data)
+        
+        return Response(
+            content=docx_content.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f"attachment; filename=chat_{chat_id[:10]}.docx"
+            }
+        )
+    else:
+        odt_content = _chat_to_odt(chat_data)
+        
+        return Response(
+            content=odt_content.getvalue(),
+            media_type="application/vnd.oasis.opendocument.text",
+            headers={
+                "Content-Disposition": f"attachment; filename=chat_{chat_id[:10]}.odt"
+            }
+        )
+
+
+@app.get("/api/chat/download/docx")
+async def download_chat_docx(
+    chat_id: str = None,
+    current_user = Depends(get_current_user)
+):
+    """Download current chat as DOCX file (shortcut endpoint)."""
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id parameter required")
+    
+    chat_data = get_chat(chat_id, current_user["username"])
+    if not chat_data:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    docx_content = _chat_to_docx(chat_data)
     
     return Response(
-        content=odt_content.getvalue(),
-        media_type="application/vnd.oasis.opendocument.text",
+        content=docx_content.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={
-            "Content-Disposition": f"attachment; filename=chat_{chat_id[:10]}.odt"
+            "Content-Disposition": f"attachment; filename=chat_{chat_id[:10]}.docx"
         }
     )
 

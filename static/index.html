@@ -412,6 +412,35 @@
             color: var(--text-faint);
             font-size: 0.85rem;
         }
+        .download-menu-wrapper {
+            position: relative;
+        }
+        .download-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 6px;
+            min-width: 150px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            z-index: 100;
+        }
+        .download-menu button {
+            display: block;
+            width: 100%;
+            padding: 8px 14px;
+            text-align: left;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .download-menu button:hover { 
+            background: var(--bg);
+        }
         .history-item {
             display: flex;
             align-items: flex-start;
@@ -467,7 +496,13 @@
         <div class="header-buttons">
             <button onclick="toggleHistoryPanel()">History</button>
             <button onclick="newChat()">New Chat</button>
-            <button onclick="downloadChat()" id="download-btn" style="display: none;">Download</button>
+            <div class="download-menu-wrapper">
+                <button onclick="toggleDownloadMenu()" id="download-btn" style="display: none;">More ▾</button>
+                <div class="download-menu" id="download-menu">
+                    <button onclick="downloadChat('odt')">Download ODT</button>
+                    <button onclick="downloadChat('docx')">Download DOCX</button>
+                </div>
+            </div>
             <div class="history-backdrop" id="history-backdrop" onclick="toggleHistoryPanel()"></div>
             <div class="history-panel" id="history-panel"></div>
         </div>
@@ -661,7 +696,7 @@
             document.getElementById('download-btn').style.display = 'none';
         }
 
-        async function downloadChat() {
+        async function downloadChat(format = 'odt') {
             if (!currentChatId) {
                 alert('No chat to download');
                 return;
@@ -669,7 +704,8 @@
             
             try {
                 const token = localStorage.getItem('zotero_token');
-                const response = await fetch(`/api/chat/download?chat_id=${encodeURIComponent(currentChatId)}`, {
+                const urlRoot = format === 'docx' ? '/api/chat/download/docx' : '/api/chat/download';
+                const response = await fetch(`${urlRoot}?chat_id=${encodeURIComponent(currentChatId)}`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 
@@ -681,7 +717,7 @@
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `chat_${currentChatId}.odt`;
+                a.download = `chat_${currentChatId}.${format}`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
@@ -691,6 +727,25 @@
                 alert('Failed to download chat: ' + e.message);
             }
         }
+
+function toggleDownloadMenu() {
+            const menu = document.getElementById('download-menu');
+            if (!menu) return;
+            if (menu.style.display === 'block') {
+                menu.style.display = 'none';
+            } else {
+                menu.style.display = 'block';
+            }
+        }
+
+document.addEventListener('click', function(e) {
+            const menu = document.getElementById('download-menu');
+            if (!menu) return;
+            const btn = document.getElementById('download-btn');
+            if (menu.style.display === 'block' && !menu.contains(e.target) && !btn.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
 
         function addMessage(role, html) {
             const welcome = document.getElementById('welcome-msg');
