@@ -76,7 +76,8 @@ def _build_source_context(sources):
     if not sources:
         return "\n[No sources found for this query.]\n"
     parts = ["\n--- BEGIN SOURCES ---"]
-    for i, s in enumerate(sources, 1):
+    for s in sources:
+        source_num = s.get('source_num') or 1
         authors = ', '.join(s.get('authors', [])) or 'Unknown'
         title = s.get('title', 'Untitled')
         date = s.get('date', '')
@@ -98,7 +99,7 @@ def _build_source_context(sources):
                 archive_str += f", {archive_loc}"
 
         parts.append(
-            f"\n[{i}] \"{title}\" -- {authors}"
+            f"\n[{source_num}] \"{title}\" -- {authors}"
             f"{' (' + date + ')' if date else ''}{page_str}"
             f"\nType: {item_type}{archive_str}"
             f"\n{text}\n"
@@ -136,6 +137,9 @@ def _format_source_for_client(result):
         'zotero_url': zotero_url,
         'score': float(result.get('score', 0)),
         'rerank_score': float(result['rerank_score']) if result.get('rerank_score') is not None else None,
+        'chunk_id': result.get('id'),
+        'zotero_key': zotero_key,
+        'chunk_index': meta.get('chunk_index', 0),
     }
 
 
@@ -397,6 +401,7 @@ async def chat(request: Request, current_user = Depends(get_current_user)):
     body = await request.json()
     message = body.get('message', '').strip()
     prev_conversation = body.get('conversation', [])
+    existing_sources = body.get('sources', [])
     filter_vals = body.get('filters', {})
     top_k = body.get('top_k', 10)
 
@@ -417,23 +422,36 @@ async def chat(request: Request, current_user = Depends(get_current_user)):
                 date_to=filter_vals.get('date_to') or None,
             )
 
-            client_sources = [_format_source_for_client(r) for r in results]
+            # Build lookup set of existing sources to deduplicate
+            existing_source_keys = {
+                f"{s.get('zotero_key', '')}_{s.get('chunk_index', 0)}" 
+                for s in existing_sources
+            }
+            
+            # Assign source_num to new sources based on offset
+            source_offset = len(existing_sources)
+            client_sources = []
+            for r in results:
+                formatted = _format_source_for_client(r)
+                compound_key = f"{formatted['zotero_key']}_{formatted['chunk_index']}"
+                if compound_key in existing_source_keys:
+                    # Source already exists, use its source_num
+                    existing = next((s for s in existing_sources if f"{s.get('zotero_key', '')}_{s.get('chunk_index', 0)}" == compound_key), None)
+                    if existing and 'source_num' in existing:
+                        formatted['source_num'] = existing['source_num']
+                    else:
+                        # Fallback: increment offset
+                        source_offset += 1
+                        formatted['source_num'] = source_offset
+                else:
+                    # New unique source, assign next number
+                    source_offset += 1
+                    formatted['source_num'] = source_offset
+                client_sources.append(formatted)
+            
             yield f"data: {json.dumps({'type': 'sources', 'sources': client_sources})}\n\n"
 
-            source_context = _build_source_context([
-                {
-                    'title': r['metadata'].get('title', ''),
-                    'authors': r['metadata'].get('authors', []),
-                    'date': r['metadata'].get('date', ''),
-                    'item_type': r['metadata'].get('item_type', ''),
-                    'archive': r['metadata'].get('archive', ''),
-                    'archive_location': r['metadata'].get('archive_location', ''),
-                    'page_start': r['metadata'].get('page_start', 0),
-                    'page_end': r['metadata'].get('page_end', 0),
-                    'text': r['metadata'].get('text', ''),
-                }
-                for r in results
-            ])
+            source_context = _build_source_context(client_sources)
 
             messages = []
             for msg in prev_conversation:

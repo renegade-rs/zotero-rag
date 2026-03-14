@@ -396,8 +396,8 @@
             top: 100%;
             right: 0;
             margin-top: 6px;
-            width: 300px;
-            max-height: 400px;
+            width: min(60vw, 600px);
+            max-height: 600px;
             overflow-y: auto;
             background: var(--surface);
             border: 1px solid var(--border);
@@ -427,9 +427,9 @@
         .history-item-title {
             font-size: 0.85rem;
             font-weight: 500;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            white-space: normal;
+            word-wrap: break-word;
+            overflow: visible;
         }
         .history-item-meta {
             font-size: 0.72rem;
@@ -571,6 +571,7 @@
     <script>
         let conversation = [];
         let currentSources = [];
+        let sourceIdMap = new Map();
         let isStreaming = false;
         let currentChatId = null;
         let currentUser = null;
@@ -646,6 +647,7 @@
             saveHistory();
             conversation = [];
             currentSources = [];
+            sourceIdMap.clear();
             currentChatId = null;
             saveHistory();
             const msgs = document.getElementById('messages');
@@ -671,15 +673,40 @@
         }
 
         function renderSources(sources) {
-            currentSources = sources;
+            let offset = currentSources.length;
+            
+            sources.forEach(source => {
+                const compoundKey = source.chunk_id || 
+                                   (source.zotero_key !== undefined && source.chunk_index !== undefined && 
+                                    `${source.zotero_key}_${source.chunk_index}`);
+                
+                if (!compoundKey) {
+                    console.warn('Source missing chunk_id and zotero_key+chunk_index:', source);
+                    return;
+                }
+                
+                const existingNum = sourceIdMap.get(compoundKey);
+                
+                if (existingNum) {
+                    console.log(`Source already in map: ${compoundKey} → #${existingNum}`);
+                } else {
+                    // Use source_num from backend if available, otherwise assign new
+                    const num = source.source_num || (offset + 1);
+                    source.source_num = num;
+                    sourceIdMap.set(compoundKey, num);
+                    currentSources.push(source);
+                    offset = Math.max(offset, num);  // Update offset to maintain continuity
+                }
+            });
+            
             const list = document.getElementById('sources-list');
-            if (!sources.length) {
+            if (!currentSources.length) {
                 list.innerHTML = '<div class="sources-empty">No sources found.</div>';
                 return;
             }
             list.innerHTML = '';
-            sources.forEach((s, i) => {
-                const num = i + 1;
+            currentSources.forEach((s) => {
+                const num = s.source_num;
                 const card = document.createElement('div');
                 card.className = 'source-card';
                 card.id = 'source-' + num;
@@ -787,6 +814,7 @@
                     body: JSON.stringify({
                         message: text,
                         conversation: conversation.slice(0, -1),
+                        sources: currentSources.slice(),
                         filters: filters,
                         top_k: filters.top_k
                     })
@@ -887,7 +915,7 @@
             if (!currentChatId || conversation.length === 0) return;
             
             const firstUserMsg = conversation.find(m => m.role === 'user');
-            const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New chat';
+            const title = firstUserMsg ? firstUserMsg.content.substring(0, 300) : 'New chat';
             
             try {
                 const token = localStorage.getItem('zotero_token');
@@ -929,6 +957,17 @@
                     currentChatId = chat.id;
                     conversation = (chat.messages || []).slice();
                     currentSources = (chat.sources || []).slice();
+                    
+                    sourceIdMap.clear();
+                    currentSources.forEach(source => {
+                        const compoundKey = source.chunk_id || 
+                                           (source.zotero_key !== undefined && source.chunk_index !== undefined && 
+                                            `${source.zotero_key}_${source.chunk_index}`);
+                        if (compoundKey && source.source_num) {
+                            sourceIdMap.set(compoundKey, source.source_num);
+                        }
+                    });
+                    
                     replayMessages();
                 }
             } catch (error) {
@@ -939,12 +978,48 @@
         function replayMessages() {
             const msgs = document.getElementById('messages');
             msgs.innerHTML = '';
+            
+            const list = document.getElementById('sources-list');
             if (currentSources.length > 0) {
-                renderSources(currentSources);
+                list.innerHTML = '';
+                currentSources.forEach((s) => {
+                    const num = s.source_num;
+                    const card = document.createElement('div');
+                    card.className = 'source-card';
+                    card.id = 'source-' + num;
+
+                    const authors = (s.authors || []).join(', ') || 'Unknown';
+                    const pageStr = s.page_start > 0
+                        ? (s.page_end > s.page_start ? `pp. ${s.page_start}-${s.page_end}` : `p. ${s.page_start}`)
+                        : '';
+
+                    let badges = '';
+                    if (s.item_type) badges += `<span class="badge">${s.item_type}</span> `;
+                    if (s.archive) badges += `<span class="badge archive">${s.archive}</span>`;
+
+                    const preview = (s.text || '').substring(0, 400) + ((s.text || '').length > 400 ? '...' : '');
+
+                    let openLink = '';
+                    if (s.zotero_url) {
+                        openLink = `<a class="open-link" href="${s.zotero_url}" target="_blank">Open in Zotero</a>`;
+                    }
+
+                    card.innerHTML = `
+                        <span class="source-num">[${num}]</span>
+                        <div class="source-title">${escapeHtml(s.title || 'Untitled')}</div>
+                        <div class="source-meta">${escapeHtml(authors)}${s.date ? ' (' + escapeHtml(s.date) + ')' : ''}${pageStr ? ' &middot; ' + pageStr : ''}</div>
+                        ${badges}
+                        <div class="source-preview" id="preview-${num}">${escapeHtml(preview)}</div>
+                        <span class="expand-btn" onclick="togglePreview(${num})">Show preview</span>
+                        ${openLink}
+                    `;
+                    list.appendChild(card);
+                });
             } else {
                 document.getElementById('sources-list').innerHTML =
                     '<div class="sources-empty">Sources will appear here after your next query.</div>';
             }
+            
             for (const msg of conversation) {
                 if (msg.role === 'user') {
                     addMessage('user', escapeHtml(msg.content));
