@@ -80,4 +80,5 @@ WEBDAV_AUTH_TYPE = os.environ.get("WEBDAV_AUTH_TYPE", "basic").lower()
 # Suppress gRPC warnings (harmless but noisy startup messages)
 SUPPRESS_GRPC_WARNINGS = os.environ.get("SUPPRESS_GRPC_WARNINGS", "true").lower()
 
-
+# Zotero-RAG base URL
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:5001")

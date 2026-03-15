@@ -22,13 +22,13 @@ from io import BytesIO
 # ODF/OOo imports for file export
 from odf.opendocument import OpenDocumentText
 from odf.style import Style, TextProperties, ParagraphProperties
-from odf.text import H, P, List, ListItem, Span
+from odf.text import H, P, List, ListItem, Span, A
 from odf.table import Table, TableRow, TableCell
 from odf.namespaces import TEXTNS
 
 # DOCX imports
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_UNDERLINE, WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
 
@@ -55,7 +55,7 @@ from src.config import (
     LLM_PROVIDER, ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
     OPENAI_API_KEY, OPENAI_CHAT_MODEL,
     OLLAMA_BASE_URL, OLLAMA_CHAT_MODEL,
-    ARCHIVE_ALIASES_FILE,
+    ARCHIVE_ALIASES_FILE, BASE_URL,
 )
 from src.search_pipeline import init_pipeline, run_search, get_archive_aliases
 from src.logging_config import setup_logging
@@ -150,7 +150,7 @@ def _format_source_for_client(result):
         'archive_location': meta.get('archive_location', ''),
         'page_start': meta.get('page_start', 0),
         'page_end': meta.get('page_end', 0),
-        'text': meta.get('text', '')[:600],
+        'text': meta.get('text', '')[:800],
         'zotero_url': zotero_url,
         'score': float(result.get('score', 0)),
         'rerank_score': float(result['rerank_score']) if result.get('rerank_score') is not None else None,
@@ -234,11 +234,46 @@ def _format_sources_section(sources: list) -> str:
         if src.get('archive_location'):
             lines.append(f"- **Location:** {src['archive_location']}")
         if src.get('text'):
-            preview = src['text'][:500] + ('...' if len(src['text']) > 500 else '')
+            preview = src['text']
             lines.append(f"- **Preview:** {preview}")
         lines.append("")
     
     return '\n'.join(lines)
+
+
+def _add_hyperlink(paragraph, text, url):
+    """Add a hyperlink to a paragraph."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    
+    part = paragraph.part
+    r_id = part.relate_to(url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', is_external=True)
+    
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
+    
+    run = OxmlElement('w:r')
+    run.append(OxmlElement('w:rPr'))
+    
+    color = OxmlElement('w:color')
+    color.set(qn('w:val'), '0066cc')
+    run.find(qn('w:rPr')).append(color)
+    
+    r = OxmlElement('w:t')
+    r.text = text
+    run.append(r)
+    
+    hyperlink.append(run)
+    paragraph.add_run().element.addprevious(hyperlink)
+    
+    return paragraph
+
+
+def _sanitize_text_for_export(text: str) -> str:
+    """Remove control characters that are not XML-compatible."""
+    if not text:
+        return text
+    return re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
 
 
 def _chat_to_odt(chat_data: dict) -> BytesIO:
@@ -300,6 +335,10 @@ def _chat_to_odt(chat_data: dict) -> BytesIO:
     code_style = Style(name="code", family="text")
     code_style.addElement(TextProperties(fontfamily='monospace', fontsize='10pt', color='#333'))
     doc.styles.addElement(code_style)
+    
+    preview_style = Style(name="Preview", family="text")
+    preview_style.addElement(TextProperties(color='#0066cc', fontsize='8pt'))
+    doc.styles.addElement(preview_style)
     
     # Build chat content
     title = chat_data.get('title', 'Chat')
@@ -442,6 +481,28 @@ def _chat_to_odt(chat_data: dict) -> BytesIO:
             if src.get('archive'):
                 p_archive = P(text=f"  Archive: {src['archive']}")
                 doc.text.addElement(p_archive)
+            
+            if src.get('text'):
+                preview_text = _sanitize_text_for_export(src['text']).replace('\n\n', '\n')
+                if preview_text:
+                    p_preview = P(text="  Preview: ")
+                    run_preview = Span(text=preview_text)
+                    run_preview.setAttrNS(TEXTNS, 'style-name', 'Preview')
+                    p_preview.addElement(run_preview)
+                    doc.text.addElement(p_preview)
+            
+            if src.get('zotero_url'):
+                zotero_path = src['zotero_url']
+                if not zotero_path.startswith('http://') and not zotero_path.startswith('https://'):
+                    full_zotero_url = f"{BASE_URL}{zotero_path}"
+                else:
+                    full_zotero_url = zotero_path
+                p_zotero = P()
+                prefix_span = Span(text="  Open in Zotero: ")
+                p_zotero.addElement(prefix_span)
+                link = A(href=full_zotero_url, text=full_zotero_url)
+                p_zotero.addElement(link)
+                doc.text.addElement(p_zotero)
             
             p_sep = P(text="  ")
             doc.text.addElement(p_sep)
@@ -780,6 +841,13 @@ def _chat_to_docx(chat_data: dict) -> BytesIO:
         source_font.color.rgb = None  # Auto color
         source_para_format = source_style.paragraph_format
         source_para_format.left_indent =Pt(0.5)
+        source_para_format.space_after = Pt(0)
+    if 'Preview' not in styles:
+        preview_style = styles.add_style('Preview', WD_STYLE_TYPE.PARAGRAPH)
+        preview_style.base_style = styles['Normal']
+        preview_font = preview_style.font
+        preview_font.size = Pt(8)
+        preview_font.color.rgb = RGBColor(0, 102, 204)
     
     # Build chat content
     title = chat_data.get('title', 'Chat')
@@ -898,16 +966,38 @@ def _chat_to_docx(chat_data: dict) -> BytesIO:
                 p_page.add_run(f"  Pages: {src['page_start']}")
                 if src.get('page_end') and src['page_end'] != src['page_start']:
                     p_page.add_run(f"-{src['page_end']}")
+                p_page.paragraph_format.space_after = Pt(0)
             
             if src.get('item_type'):
                 p_type = doc.add_paragraph()
                 p_type.add_run(f"  Type: {src['item_type']}")
+                p_type.paragraph_format.space_after = Pt(0)
             
             if src.get('archive'):
                 p_archive = doc.add_paragraph()
                 p_archive.add_run(f"  Archive: {src['archive']}")
+                p_archive.paragraph_format.space_after = Pt(0)
             
-            doc.add_paragraph()
+            if src.get('text'):
+                preview_text = _sanitize_text_for_export(src['text']).replace('\n\n', '\n')
+                if preview_text:
+                    p_preview = doc.add_paragraph()
+                    p_preview.add_run("  Preview: ")
+                    run = p_preview.add_run(preview_text)
+                    run.font.color.rgb = RGBColor(0, 102, 204)
+                    run.font.size = Pt(8)
+                    p_preview.paragraph_format.space_after = Pt(0)
+            
+            if src.get('zotero_url'):
+                zotero_path = src['zotero_url']
+                if not zotero_path.startswith('http://') and not zotero_path.startswith('https://'):
+                    full_zotero_url = f"{BASE_URL}{zotero_path}"
+                else:
+                    full_zotero_url = zotero_path
+                p_zotero = doc.add_paragraph()
+                p_zotero.add_run("  Open in Zotero: ")
+                _add_hyperlink(p_zotero, full_zotero_url, full_zotero_url)
+                #p_zotero.paragraph_format.space_after = Pt(0)
     
     # Save to BytesIO
     output = BytesIO()
@@ -1358,4 +1448,6 @@ if __name__ == '__main__':
     print("done.")
     print(f"Using LLM provider: {LLM_PROVIDER}")
     print("Open http://localhost:5001 in your browser.")
-    uvicorn.run(app, host="127.0.0.1", port=5001, log_level="info")
+    baseurl = BASE_URL.split(":")[1].split("//")[1] if ":" in BASE_URL else "127.0.0.1"
+    port = int(BASE_URL.split(":")[-1]) if ":" in BASE_URL else 5001
+    uvicorn.run(app, host=baseurl, port=port, log_level="info")
