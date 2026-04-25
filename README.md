@@ -1,10 +1,14 @@
-**This is a fork of the [Zotero RAG](https://github.com/freshaf/zotero-rag) repository by [freshaf](https://github.com/freshaf).**
+**This is a fork of the [Zotero RAG](https://github.com/aaron-freedman/zotero-rag) repository by [aaron-freedman](https://github.com/aaron-freedman).**
 
 Additions/Changes:
 - Support for using **webdav** storage besides Zotero storage
 - Changed from Pinecone as vectordatabase storage to open-source, locally running **Milvus**
 - Webapp: Output stream now independent from CDN by using local `marked.min.js`
-
+- Added user authentication and user management for admin account (admin will be the first registered account)
+- Allow continuous references between messages within a chat
+- History pane layout displays longer titles now
+- Allow chat export to odt and docx formats  
+  
 ----
 ----    
 
