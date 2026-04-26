@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 def preprocess_text(text):
     """Clean up extracted text: rejoin hyphenated line breaks, normalize whitespace."""
-    text = re.sub(r'(\w)-\n(\w)', r'\1\2', text)
-    text = re.sub(r'\f', ' ', text)  # NEW: Convert form feeds to spaces
+
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[^\S\n\f]+', ' ', text)
     return text.strip()
@@ -195,6 +194,7 @@ def extract_item_metadata(item):
         'date': data.get('date', ''),
         'archive': data.get('archive', ''),
         'archive_location': data.get('archiveLocation', ''),
+        'pages': data.get('pages', ''),
         'tags': [t['tag'] for t in data.get('tags', [])],
         'collections': coll_names,
         'archive_collection': rag.get('archive_collection', ''),
