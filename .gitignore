@@ -20,3 +20,4 @@ data/users.json
 *.bak2
 *.backup
 webapp_original.py
+tests/

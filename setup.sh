@@ -17,20 +17,6 @@ fi
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 echo "Found Python $PYTHON_VERSION"
 
-# Check pdftotext
-if ! command -v pdftotext &> /dev/null; then
-    echo ""
-    echo "WARNING: pdftotext is not installed (needed for PDF text extraction)."
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "  Install with: brew install poppler"
-    elif [[ "$OSTYPE" == "linux"* ]]; then
-        echo "  Install with: sudo apt install poppler-utils"
-    else
-        echo "  Download from: https://github.com/oschwartz10612/poppler-windows/releases"
-    fi
-    echo ""
-fi
-
 # Create virtual environment
 if [ ! -d ".venv" ]; then
     echo "Creating Python virtual environment..."

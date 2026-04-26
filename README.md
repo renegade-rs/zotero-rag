@@ -70,14 +70,7 @@ Pinecone's free tier supports up to ~100,000 chunks, which is enough for most re
 ### Prerequisites
 
 - **Python 3.10+** -- [Download Python](https://www.python.org/downloads/)
-- **Zotero 6 or 7** -- [Download Zotero](https://www.zotero.org/download/)
-- **pdftotext** -- for extracting text from PDFs (see below)
-
-#### Install pdftotext
-
-- **macOS:** `brew install poppler` (install [Homebrew](https://brew.sh) first if you don't have it)
-- **Ubuntu/Debian:** `sudo apt install poppler-utils`
-- **Windows:** Download from [poppler releases](https://github.com/oschwartz10612/poppler-windows/releases) and add to your PATH
+- **Zotero 6-9** -- [Download Zotero](https://www.zotero.org/download/)
 
 ### Step 1: Download the Code
 
@@ -327,8 +320,8 @@ Web App / CLI / MCP Server
 
 ## Troubleshooting
 
-**"pdftotext not found"**
-Install poppler (see Prerequisites above).
+**PDF extraction fails with "docling failed"**
+Ensure docling is installed in your Python environment: `pip install docling`. OCR models are downloaded automatically on first use.
 
 **"OPENAI_API_KEY not set"**
 Make sure you copied `.env.example` to `.env` and filled in your keys.
