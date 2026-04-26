@@ -49,8 +49,16 @@ def format_results(results, query_str):
 
         page_start = meta.get('page_start', 0)
         page_end = meta.get('page_end', 0)
-        page_str = ''
+        
+        work_pages = meta.get('pages', '')
+        pdf_page_str = ''
         if page_start > 0:
+            pdf_page_str = f" [PDF pp. {page_start}-{page_end}]" if page_end > page_start else f" [PDF p. {page_start}]"
+        
+        page_str = ''
+        if work_pages:
+            page_str = f", {work_pages}" + (pdf_page_str if pdf_page_str else "")
+        elif page_start > 0:
             page_str = f", pp. {page_start}-{page_end}" if page_end > page_start else f", p. {page_start}"
 
         zotero_key = meta.get('zotero_key', '')

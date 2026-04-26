@@ -157,14 +157,22 @@ async def search_zotero(
         page_start = meta.get('page_start', 0)
         page_end = meta.get('page_end', 0)
         chapter = meta.get('chapter', '')
+        work_pages = meta.get('pages', '')
+        
+        pdf_page_str = ''
+        if page_start > 0:
+            pdf_page_str = f" [PDF pp. {page_start}-{page_end}]" if page_end > page_start else f" [PDF p. {page_start}]"
+        
         page_str = ''
         if attachment_type == 'epub' and chapter:
-            page_str = f", ch. \"{chapter}\""
+            page_str = f", ch. \"{chapter}\"" + (pdf_page_str if pdf_page_str else "")
+        elif work_pages:
+            page_str = f", {work_pages}" + (pdf_page_str if pdf_page_str else "")
         elif page_start > 0:
             if page_end > page_start:
-                page_str = f", pp. {page_start}-{page_end}"
+                page_str = f", pp. {page_start}-{page_end}" + (pdf_page_str if pdf_page_str else "")
             else:
-                page_str = f", p. {page_start}"
+                page_str = f", p. {page_start}" + (pdf_page_str if pdf_page_str else "")
 
         zotero_key = meta.get('zotero_key', '')
         attachment_key = meta.get('attachment_key', '')

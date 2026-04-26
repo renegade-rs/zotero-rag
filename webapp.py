@@ -103,8 +103,16 @@ def _build_source_context(sources):
 
         page_start = s.get('page_start', 0)
         page_end = s.get('page_end', 0)
-        page_str = ''
+        
+        work_pages = s.get('pages', '')
+        pdf_page_str = ''
         if page_start > 0:
+            pdf_page_str = f" [PDF pp. {page_start}-{page_end}]" if page_end > page_start else f" [PDF p. {page_start}]"
+        
+        page_str = ''
+        if work_pages:
+            page_str = f", {work_pages}" + (pdf_page_str if pdf_page_str else "")
+        elif page_start > 0:
             page_str = f", pp. {page_start}-{page_end}" if page_end > page_start else f", p. {page_start}"
 
         archive = s.get('archive', '')
@@ -150,6 +158,7 @@ def _format_source_for_client(result):
         'archive_location': meta.get('archive_location', ''),
         'page_start': meta.get('page_start', 0),
         'page_end': meta.get('page_end', 0),
+        'pages': meta.get('pages', ''),
         'text': meta.get('text', '')[:800],
         'zotero_url': zotero_url,
         'score': float(result.get('score', 0)),

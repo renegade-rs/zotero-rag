@@ -219,6 +219,7 @@ def index_items(items, zot, collection_tree, batch_size=50):
                 'page_start': chunk['metadata'].get('page_start', 0),
                 'page_end': chunk['metadata'].get('page_end', 0),
                 'page_count': chunk['metadata'].get('page_count', 0),
+                'pages': chunk['metadata'].get('pages', ''),
                 'pdf_page': chunk['metadata'].get('pdf_page', 0),
             }
             if 'attachment_key' in chunk['metadata']:

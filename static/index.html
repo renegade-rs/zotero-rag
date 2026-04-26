@@ -800,9 +800,16 @@ document.addEventListener('click', function(e) {
                 card.id = 'source-' + num;
 
                 const authors = (s.authors || []).join(', ') || 'Unknown';
-                const pageStr = s.page_start > 0
-                    ? (s.page_end > s.page_start ? `pp. ${s.page_start}-${s.page_end}` : `p. ${s.page_start}`)
-                    : '';
+
+                let pageStr = '';
+                const workPages = s.pages || '';
+                if (workPages) {
+                    pageStr += escapeHtml(workPages);
+                }
+                if (s.page_start > 0) {
+                    const pdfPage = s.page_end > s.page_start ? `pp. ${s.page_start}-${s.page_end}` : `p. ${s.page_start}`;
+                    pageStr += workPages ? ` [PDF ${pdfPage}]` : pdfPage;
+                }
 
                 let badges = '';
                 if (s.item_type) badges += `<span class="badge">${s.item_type}</span> `;
@@ -1078,9 +1085,16 @@ document.addEventListener('click', function(e) {
                     card.id = 'source-' + num;
 
                     const authors = (s.authors || []).join(', ') || 'Unknown';
-                    const pageStr = s.page_start > 0
-                        ? (s.page_end > s.page_start ? `pp. ${s.page_start}-${s.page_end}` : `p. ${s.page_start}`)
-                        : '';
+
+                    let pageStr = '';
+                    const workPages = s.pages || '';
+                    if (workPages) {
+                        pageStr += escapeHtml(workPages);
+                    }
+                    if (s.page_start > 0) {
+                        const pdfPage = s.page_end > s.page_start ? `pp. ${s.page_start}-${s.page_end}` : `p. ${s.page_start}`;
+                        pageStr += workPages ? ` [PDF ${pdfPage}]` : pdfPage;
+                    }
 
                     let badges = '';
                     if (s.item_type) badges += `<span class="badge">${s.item_type}</span> `;
