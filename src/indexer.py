@@ -5,7 +5,7 @@ import logging
 import re
 import sys
 
-from src.config import SYNC_STATE_FILE, ARCHIVE_ALIASES_FILE, COLLECTION_KEY
+from src.config import SYNC_STATE_FILE, ARCHIVE_ALIASES_FILE, COLLECTION_KEY, CACHE_DIR
 print('Collection key: ', COLLECTION_KEY)
 from src.zotero_client import (
     get_zotero_client, build_collection_tree, get_all_items,
@@ -13,7 +13,7 @@ from src.zotero_client import (
 )
 from src.extractors import (
     select_best_attachment, extract_pdf_text, extract_epub_text,
-    extract_html_text, extract_item_metadata,
+    extract_html_text, extract_item_metadata, preprocess_text,
 )
 from src.chunker import chunk_document, chunk_epub
 from src.embeddings import init_embeddings, embed_texts, get_embedding_dimension
@@ -73,7 +73,7 @@ def save_sync_state(state):
     SYNC_STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def process_item(zot, item, collection_tree):
+def process_item(zot, item, collection_tree, force_reextract=False):
     """Process a single Zotero item: extract text, chunk, return chunks."""
     metadata = extract_item_metadata(item)
     item_key = item['key']
@@ -88,7 +88,47 @@ def process_item(zot, item, collection_tree):
     if attachments:
         best_att, att_type = select_best_attachment(attachments)
         
-        if best_att and att_type == 'pdf':
+        if not force_reextract and best_att:
+            cache_key = f"{item_key}"
+            if att_type == 'pdf':
+                filename = best_att['data'].get('filename', '')
+                cache_path = CACHE_DIR / f"{filename}_{item_key}.txt"
+                if cache_path.exists():
+                    logger.info(f"  -> Using cached PDF for {title}")
+                    text = preprocess_text(cache_path.read_text(encoding="utf-8"))
+                    if text.strip():
+                        page_count = text.count("\f") + 1
+                        metadata['attachment_key'] = best_att['key']
+                        metadata['attachment_type'] = 'pdf'
+                        metadata['page_count'] = page_count
+                        chunks = chunk_document(text, item_type, metadata)
+                
+            elif att_type == 'epub':
+                cache_path = CACHE_DIR / f"{cache_key}.epub.json"
+                if cache_path.exists():
+                    logger.info(f"  -> Using cached EPUB for {title}")
+                    try:
+                        import json as _json
+                        data = _json.loads(cache_path.read_text(encoding="utf-8"))
+                        chapters = [(t, c) for t, c in data]
+                        if chapters:
+                            metadata['attachment_key'] = best_att['key']
+                            metadata['attachment_type'] = 'epub'
+                            chunks = chunk_epub(chapters, metadata)
+                    except Exception as e:
+                        logger.warning(f"Failed to read EPUB cache for {item_key}: {e}")
+
+            elif att_type == 'snapshot':
+                cache_path = CACHE_DIR / f"{cache_key}.html.txt"
+                if cache_path.exists():
+                    logger.info(f"  -> Using cached HTML for {title}")
+                    text = preprocess_text(cache_path.read_text(encoding="utf-8"))
+                    if text.strip():
+                        chunks = chunk_document(text, item_type, metadata)
+
+        if not force_reextract and chunks:
+            logger.info(f"  -> Skipped re-extraction for {title}")
+        elif best_att and att_type == 'pdf':
             result = fetch_attachment_file(zot, best_att['key'])
             if result:
                 file_bytes, filename, _, source = result
@@ -125,7 +165,11 @@ def process_item(zot, item, collection_tree):
                         chunks = chunk_document(text, item_type, metadata)
                 except Exception as e:
                     logger.warning(f"Failed to extract snapshot for {item_key}: {e}")
-        else:
+
+        if not chunks and best_att:
+            logger.info(f"  -> skipped (cache hit failed for {att_type})")
+
+        if not chunks:
             abstract = metadata.get('abstract', '')
             if abstract:
                 chunks = chunk_document(abstract, item_type, metadata)
@@ -150,7 +194,7 @@ def process_item(zot, item, collection_tree):
 
     return chunks
 
-def index_items(items, zot, collection_tree, batch_size=50):
+def index_items(items, zot, collection_tree, batch_size=50, force_reextract=False):
     """Index a list of items: extract, chunk, embed, upsert to Pinecone."""
     all_chunks = []
     skipped = 0
@@ -160,7 +204,7 @@ def index_items(items, zot, collection_tree, batch_size=50):
         title = item['data'].get('title', '')[:60]
         logger.info(f"[{i+1}/{len(items)}] Processing: {title}")
 
-        chunks = process_item(zot, item, collection_tree)
+        chunks = process_item(zot, item, collection_tree, force_reextract=force_reextract)
         if chunks:
             all_chunks.extend(chunks)
             processed += 1
@@ -238,7 +282,7 @@ def index_items(items, zot, collection_tree, batch_size=50):
     logger.info("Indexing complete.")
 
 
-def run_full_index():
+def run_full_index(force_reextract=False):
     """Full re-index of the target collection (or entire library)."""
     import logging
     
@@ -270,7 +314,7 @@ def run_full_index():
     items = get_all_items(zot, tree)
     logger.info(f"Found {len(items)} items")
 
-    index_items(items, zot, tree)
+    index_items(items, zot, tree, force_reextract=force_reextract)
 
     state = {
         'library_version': zot.last_modified_version(),
@@ -280,7 +324,7 @@ def run_full_index():
     logger.info(f"Sync state saved (version {state['library_version']})")
 
 
-def run_incremental_update():
+def run_incremental_update(force_reextract=False):
     """Only index new/changed items since last sync."""
     import logging
     
@@ -325,7 +369,7 @@ def run_incremental_update():
         for item in new_items:
             if item['key'] in indexed_keys:
                 delete_by_zotero_key(item['key'])
-        index_items(new_items, zot, tree)
+        index_items(new_items, zot, tree, force_reextract=force_reextract)
     else:
         logger.info("No new items to index.")
 

@@ -11,6 +11,7 @@ import os
 ZOTERO_LIBRARY_ID = os.environ.get("ZOTERO_LIBRARY_ID", "")
 ZOTERO_API_KEY = os.environ.get("ZOTERO_API_KEY", "")
 ZOTERO_LIBRARY_TYPE = os.environ.get("ZOTERO_LIBRARY_TYPE", "user")
+ZOTERO_TIMEOUT = int(os.environ.get("ZOTERO_TIMEOUT", "120"))
 
 # Collection to index (optional — indexes entire library if not set)
 COLLECTION_KEY = os.environ.get("ZOTERO_COLLECTION_KEY", "")
@@ -82,3 +83,6 @@ SUPPRESS_GRPC_WARNINGS = os.environ.get("SUPPRESS_GRPC_WARNINGS", "true").lower(
 
 # Zotero-RAG base URL
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:5001")
+
+# Cache reuse
+KEEP_CACHE = os.environ.get("KEEP_CACHE", "true").lower() == "true"

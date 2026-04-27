@@ -6,6 +6,7 @@ import re
 from pyzotero import zotero
 from src.config import (
     ZOTERO_LIBRARY_ID, ZOTERO_API_KEY, ZOTERO_LIBRARY_TYPE, COLLECTION_KEY,
+    ZOTERO_TIMEOUT,
 )
 
 try:
@@ -21,6 +22,8 @@ def get_zotero_client():
             "ZOTERO_LIBRARY_ID and ZOTERO_API_KEY must be set. "
             "See .env.example for details."
         )
+    import pyzotero._utils as _utils
+    _utils.DEFAULT_TIMEOUT = ZOTERO_TIMEOUT
     return zotero.Zotero(ZOTERO_LIBRARY_ID, ZOTERO_LIBRARY_TYPE, ZOTERO_API_KEY)
 
 

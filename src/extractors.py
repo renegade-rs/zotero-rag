@@ -1,5 +1,6 @@
 """Text extraction from Zotero attachments: PDF, EPUB, HTML snapshots, and notes."""
 
+import json
 import logging
 import re
 import tempfile
@@ -282,7 +283,7 @@ def _remove_generic_headers_footers(multiline_text, num_pages):
     return PAGE_SEP.join(cleaned_pages)
 
 
-def extract_pdf_text(pdf_bytes, item_key, filename):
+def extract_pdf_text(pdf_bytes, item_key, filename, force_reextract=False):
     """Extract text from PDF bytes using docling with OCR.
 
     Uses docling's export_to_markdown() for high-quality extraction with
@@ -330,11 +331,16 @@ def extract_pdf_text(pdf_bytes, item_key, filename):
         return "", 0
 
 
-def extract_epub_text(epub_bytes, item_key):
+def extract_epub_text(epub_bytes, item_key, force_reextract=False):
     """Extract text from EPUB bytes using ebooklib.
 
     Returns list of (chapter_title, chapter_text) tuples.
     """
+    cache_path = CACHE_DIR / f"{item_key}.epub.json"
+    if not force_reextract and cache_path.exists():
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        return [(title, text) for title, text in data]
+
     import ebooklib
     from ebooklib import epub
 
@@ -355,13 +361,18 @@ def extract_epub_text(epub_bytes, item_key):
             if text.strip():
                 chapters.append((title, text))
 
+        cache_path.write_text(json.dumps([[t, c] for t, c in chapters], indent=2), encoding="utf-8")
         return chapters
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
 
-def extract_html_text(html_content):
+def extract_html_text(html_content, item_key=None, force_reextract=False):
     """Extract text from HTML snapshot content."""
+    cache_path = CACHE_DIR / f"{item_key}.html.txt" if item_key else None
+    if cache_path and not force_reextract and cache_path.exists():
+        return preprocess_text(cache_path.read_text(encoding="utf-8"))
+
     if isinstance(html_content, bytes):
         html_content = html_content.decode('utf-8', errors='replace')
 
@@ -370,7 +381,10 @@ def extract_html_text(html_content):
         tag.decompose()
 
     text = soup.get_text(separator='\n')
-    return preprocess_text(text)
+    result = preprocess_text(text)
+    if cache_path:
+        cache_path.write_text(result, encoding="utf-8")
+    return result
 
 
 def extract_note_text(note_html):
