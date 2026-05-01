@@ -23,8 +23,8 @@ from io import BytesIO
 from odf.opendocument import OpenDocumentText
 from odf.style import Style, TextProperties, ParagraphProperties
 from odf.text import H, P, List, ListItem, Span, A
-from odf.table import Table, TableRow, TableCell
-from odf.namespaces import TEXTNS
+from odf.table import Table, TableRow, TableCell, TableColumn, TableColumns
+from odf.namespaces import FONS, TEXTNS
 
 # DOCX imports
 from docx import Document
@@ -634,8 +634,14 @@ def _parse_markdown_table(lines: list) -> tuple:
         rows.append(cells)
         i += 1
     
-    # Create ODT table
+    # Create ODT table with explicit column definitions
     table = Table(name="Table1")
+    
+    # Define columns before adding rows (required for multi-column ODT tables)
+    col_defs = TableColumns()
+    for _ in headers:
+        col_defs.addElement(TableColumn())
+    table.addElement(col_defs)
     
     # Header row
     header_row = TableRow()
@@ -643,6 +649,8 @@ def _parse_markdown_table(lines: list) -> tuple:
         cell = TableCell()
         p = P()
         _parse_inline_markdown(p, header)
+        p.setAttrNS(FONS, 'margin-left', '0.1in')
+        p.setAttrNS(FONS, 'margin-right', '0.1in')
         cell.addElement(p)
         header_row.addElement(cell)
     table.addElement(header_row)
@@ -654,6 +662,8 @@ def _parse_markdown_table(lines: list) -> tuple:
             cell = TableCell()
             p = P()
             _parse_inline_markdown(p, cell_text)
+            p.setAttrNS(FONS, 'margin-left', '0.1in')
+            p.setAttrNS(FONS, 'margin-right', '0.1in')
             cell.addElement(p)
             data_row.addElement(cell)
         table.addElement(data_row)
