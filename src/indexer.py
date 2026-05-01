@@ -10,6 +10,7 @@ print('Collection key: ', COLLECTION_KEY)
 from src.zotero_client import (
     get_zotero_client, build_collection_tree, get_all_items,
     get_child_attachments, fetch_attachment_file,
+    _load_fetched_progress, _clear_fetched_progress,
 )
 from src.extractors import (
     select_best_attachment, extract_pdf_text, extract_epub_text,
@@ -310,11 +311,17 @@ def run_full_index(force_reextract=False):
     else:
         logger.info("No ZOTERO_COLLECTION_KEY set - indexing entire library")
 
+    # Load progress for resume capability after 502 errors
+    previously_fetched_keys = _load_fetched_progress()
+
     logger.info("Fetching all items...")
-    items = get_all_items(zot, tree)
+    items = get_all_items(zot, tree, previously_fetched_keys=previously_fetched_keys)
     logger.info(f"Found {len(items)} items")
 
     index_items(items, zot, tree, force_reextract=force_reextract)
+
+    # Clear progress on successful completion
+    _clear_fetched_progress()
 
     state = {
         'library_version': zot.last_modified_version(),
@@ -350,7 +357,10 @@ def run_incremental_update(force_reextract=False):
         tree = build_collection_tree(zot)
         build_archive_aliases(tree)
 
-    items = get_all_items(zot, tree)
+    # Load progress for resume capability after 502 errors
+    previously_fetched_keys = _load_fetched_progress()
+
+    items = get_all_items(zot, tree, previously_fetched_keys=previously_fetched_keys)
     current_keys = {i['key'] for i in items}
 
     removed = indexed_keys - current_keys
@@ -372,6 +382,9 @@ def run_incremental_update(force_reextract=False):
         index_items(new_items, zot, tree, force_reextract=force_reextract)
     else:
         logger.info("No new items to index.")
+
+    # Clear progress on successful completion
+    _clear_fetched_progress()
 
     state = {
         'library_version': zot.last_modified_version(),
